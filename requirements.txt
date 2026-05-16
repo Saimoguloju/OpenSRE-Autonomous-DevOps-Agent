@@ -1,0 +1,10 @@
+anthropic>=0.40.0
+langgraph>=0.2.0
+psutil>=5.9.0
+slack-bolt>=1.18.0
+python-dotenv>=1.0.0
+
+# Optional — only needed for real AWS/K8s/DB integration
+# boto3>=1.34.0
+# psycopg2-binary>=2.9.9
+# kubernetes>=29.0.0

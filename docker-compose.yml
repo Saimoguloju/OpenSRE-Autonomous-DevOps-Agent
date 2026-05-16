@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  opensre:
+    build: .
+    container_name: opensre
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - opensre_data:/app/data
+    environment:
+      - OPENSRE_DB_PATH=/app/data/opensre_incidents.db
+
+volumes:
+  opensre_data:
