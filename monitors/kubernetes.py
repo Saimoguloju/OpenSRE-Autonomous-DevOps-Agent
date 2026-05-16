@@ -16,7 +16,9 @@ SIMULATED_PODS = [
 
 class KubernetesMonitor(BaseMonitor):
     name = "kubernetes"
-    _call_count = 0
+
+    def __init__(self):
+        self._call_count = 0  # instance variable — not shared across instances
 
     def poll(self) -> List[Metric]:
         alerts: List[Metric] = []

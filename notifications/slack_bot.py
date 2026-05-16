@@ -1,11 +1,15 @@
 import asyncio
 import logging
+import threading
 from typing import Optional
 
 from agent.state import IncidentState
 from config import config
 
 logger = logging.getLogger(__name__)
+
+# Reference to the main event loop — set once in start_socket_mode()
+_main_loop: Optional[asyncio.AbstractEventLoop] = None
 
 SEVERITY_EMOJI = {
     "low": ":green_circle:",
@@ -95,9 +99,13 @@ class SlackNotifier:
             logger.info("Human approved action for incident %s", incident_id)
             if self.store:
                 self.store.update_status(incident_id, "acting", human_approved=True)
-                asyncio.get_event_loop().run_until_complete(
-                    self._resume_incident(incident_id)
-                )
+                # Schedule async work onto the main event loop from this sync thread
+                if _main_loop and _main_loop.is_running():
+                    asyncio.run_coroutine_threadsafe(
+                        self._resume_incident(incident_id), _main_loop
+                    )
+                else:
+                    logger.warning("Main event loop not available — cannot resume incident %s", incident_id)
             say(f":white_check_mark: Action approved for incident `{incident_id}`. Executing fix...")
 
         @self._app.action("ignore_action")
@@ -158,7 +166,13 @@ class SlackNotifier:
         if not self._enabled or not config.slack_app_token:
             logger.info("Slack socket mode not started (token missing or disabled).")
             return
-        import threading
+        # Capture the main event loop so Slack callbacks can schedule async work
+        global _main_loop
+        try:
+            _main_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            _main_loop = asyncio.get_event_loop()
+
         handler = self._SocketModeHandler(self._app, config.slack_app_token)
         thread = threading.Thread(target=handler.start, daemon=True)
         thread.start()
