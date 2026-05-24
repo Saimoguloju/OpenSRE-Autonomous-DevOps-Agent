@@ -77,11 +77,14 @@ Infrastructure                    OpenSRE Agent                     Your Team
 | 🤖 **AI Root Cause Analysis** | Claude AI analyzes each incident and writes a structured root cause + recommended remediation |
 | 🔁 **LangGraph State Machine** | Stateful `DETECT → ANALYZE → DECIDE → ACT` pipeline — no spaghetti if/else |
 | 🛡️ **Human-in-the-Loop** | All medium/high/critical incidents require explicit human approval before any action is taken |
+| 🔒 **Safety Guardrails** | Deterministic command validation preventing malicious or destructive actions (e.g. namespace deletion, `rm -rf`) |
+| 📊 **Prometheus & Grafana** | Built-in SRE metrics server tracking active incidents, execution times, and Claude analysis latency |
+| 📝 **Blameless Post-Mortems** | Automatic structured SRE post-mortem generation in markdown format after incident resolution |
 | 📢 **Multi-Channel Alerts** | Slack (interactive buttons), Telegram (Markdown cards), WhatsApp (via Twilio) — all in parallel |
 | 🔇 **Alert Deduplication** | Fingerprint-based cooldown suppresses duplicate alerts for the same ongoing incident |
 | 🗄️ **Incident Persistence** | Every incident is stored in SQLite with full lifecycle tracking (detected → resolved / ignored) |
 | 🎮 **Simulation Mode** | Runs the full pipeline without any real cloud credentials — perfect for demos and development |
-| 🐳 **One-Command Docker** | `docker-compose up` starts the entire agent with a single command |
+| 🐳 **One-Command Docker** | `docker-compose up` starts the entire agent, Prometheus metrics, and Grafana visualization |
 | 🔌 **Extensible by Design** | Add new monitors, tools, or notification channels in minutes |
 
 ---
@@ -96,6 +99,8 @@ opensre/
 ├── agent/                      # LangGraph state machine
 │   ├── state.py                # IncidentState & Metric TypedDicts
 │   ├── graph.py                # Node wiring: DETECT→ANALYZE→DECIDE→ACT
+│   ├── guardrails.py           # Safety checks and command validation
+│   ├── metrics.py              # Prometheus metrics declarations
 │   └── nodes.py                # Claude AI analysis, decision, execution logic
 │
 ├── monitors/                   # Infrastructure polling
@@ -411,23 +416,23 @@ self.pagerduty = PagerDutyNotifier()
 - [x] Alert deduplication with fingerprint cooldown
 - [x] Bug fixes (async callback, class variable, db_url)
 
-### 🔮 v1.2 — Observability Stack (Planned)
-- [ ] Prometheus `/metrics` endpoint (incident counters, MTTD, MTTR, Claude latency)
-- [ ] Pre-built Grafana dashboard (docker-compose included)
+### 🚀 v1.2 — Observability Stack (Complete)
+- [x] Prometheus `/metrics` endpoint (incident counters, execution metrics, Claude latency)
+- [x] Pre-built Grafana service integrated inside docker-compose configuration
 - [ ] OpenTelemetry distributed tracing across LangGraph nodes
 
-### 🔮 v1.3 — Smarter AI (Planned)
+### 🚀 v1.3 — Smarter AI (In Progress)
 - [ ] Confidence scoring — low-confidence analysis always requires human approval
 - [ ] RAG on past incidents — Claude reads similar historical incidents before analyzing
-- [ ] Auto post-mortem generation after incident resolution
+- [x] Auto post-mortem generation after incident resolution
 - [ ] Incident correlation — group related alerts into a single incident
 
-### 🔮 v1.4 — Production Hardening (Planned)
+### 🚀 v1.4 — Production Hardening (In Progress)
 - [ ] Web dashboard with live incident feed
-- [ ] GitHub Actions CI pipeline (lint, test, Docker build)
+- [x] GitHub Actions CI pipeline (black linting, syntax checking, test runner workflow)
 - [ ] Real AWS CloudWatch monitor integration
-- [ ] Open Policy Agent (OPA) guardrails for remediation actions
-- [ ] Unit test suite
+- [x] Custom Safety Guardrails preventing destructive action execution (similar to OPA)
+- [x] Comprehensive PyTest unit test suite (covering storage, guardrails, nodes)
 
 ---
 

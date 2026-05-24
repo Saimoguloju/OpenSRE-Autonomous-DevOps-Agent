@@ -97,6 +97,17 @@ async def process_metric(
     result = sre_graph.invoke(incident)
     store.save(result)
 
+    # Record incident metric
+    try:
+        from agent.metrics import INCIDENTS_TOTAL
+        INCIDENTS_TOTAL.labels(
+            source=metric["source"],
+            severity=severity,
+            status=result["status"]
+        ).inc()
+    except Exception as e:
+        logger.error("Failed to record incident metric: %s", e)
+
     # Broadcast to all enabled channels (Slack + Telegram + WhatsApp + console)
     slack_ts = await dispatcher.send_alert(result)
     if slack_ts:
@@ -146,6 +157,14 @@ def main():
         print(f"\nConfiguration error: {e}")
         print("Copy .env.example to .env and fill in your values.\n")
         sys.exit(1)
+
+    # Start Prometheus metrics server
+    try:
+        from prometheus_client import start_http_server
+        start_http_server(8000)
+        logger.info("Prometheus metrics server started on port 8000.")
+    except Exception as e:
+        logger.error("Failed to start Prometheus metrics server: %s", e)
 
     store = IncidentStore(config.db_path)
     dispatcher = NotificationDispatcher(store=store)
