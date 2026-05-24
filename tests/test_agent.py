@@ -1,7 +1,7 @@
 import os
 import shutil
 import pytest
-from datetime import datetime
+from datetime import datetime, UTC
 
 # Setup environment variables for testing
 os.environ["SIMULATION_MODE"] = "true"
@@ -30,7 +30,7 @@ def mock_metric() -> Metric:
         threshold=5.0,
         unit="count",
         host="production/api-deployment-7d9f8b-xk2p",
-        timestamp=datetime.utcnow().isoformat()
+        timestamp=datetime.now(UTC).isoformat()
     )
 
 # ── Safety Guardrail Tests ──────────────────────────────────────────────────
@@ -155,3 +155,84 @@ def test_prometheus_metrics_creation():
     # Increment metric to verify it works
     INCIDENTS_TOTAL.labels(source="cpu", severity="low", status="resolved").inc()
     assert INCIDENTS_TOTAL.labels(source="cpu", severity="low", status="resolved")._value.get() == 1.0
+
+# ── Local RAG Tests ─────────────────────────────────────────────────────────
+
+def test_similar_resolved_query(temp_db, mock_metric):
+    # Populate the DB with resolved incidents
+    inc1 = new_incident(mock_metric, "critical")
+    inc1["status"] = "resolved"
+    inc1["root_cause"] = "Heavy database lock on master database"
+    inc1["action_taken"] = "Killed query"
+    temp_db.save(inc1)
+    
+    inc2 = new_incident(mock_metric, "low")
+    inc2["status"] = "resolved"
+    inc2["root_cause"] = "Kubernetes pods crashing continuously"
+    inc2["action_taken"] = "Restarted pod"
+    temp_db.save(inc2)
+    
+    # Query with semantic tokens matching inc2
+    similar = temp_db.get_similar_resolved("kubernetes", "pod_crash_loop", limit=2)
+    assert len(similar) >= 1
+    # Semantic match order: pods crashing has higher overlap with kubernetes/pod_crash_loop than database lock
+    assert "Kubernetes" in similar[0]["root_cause"]
+
+def test_tfidf_ranking_logic(temp_db, mock_metric):
+    # Empty DB
+    assert temp_db.get_similar_resolved("cpu", "cpu_leak", limit=2) == []
+
+    # Insert distinct metrics
+    cpu_metric = mock_metric.copy()
+    cpu_metric["source"] = "cpu"
+    cpu_metric["name"] = "high_cpu_usage"
+    
+    inc_cpu = new_incident(cpu_metric, "medium")
+    inc_cpu["status"] = "resolved"
+    inc_cpu["root_cause"] = "CPU usage spiked from background thread"
+    inc_cpu["action_taken"] = "Restarted process"
+    temp_db.save(inc_cpu)
+
+    db_metric = mock_metric.copy()
+    db_metric["source"] = "database"
+    db_metric["name"] = "slow_queries_detected"
+
+    inc_db = new_incident(db_metric, "high")
+    inc_db["status"] = "resolved"
+    inc_db["root_cause"] = "Database connection pool saturated with locks"
+    inc_db["action_taken"] = "Killed connections"
+    temp_db.save(inc_db)
+
+    # Query for database
+    res = temp_db.get_similar_resolved("database", "slow_queries", limit=1)
+    assert len(res) == 1
+    assert res[0]["metric"]["source"] == "database"
+    assert "Database" in res[0]["root_cause"]
+
+# ── Self-Reflection & Critique Tests ────────────────────────────────────────
+
+def test_critique_remediation_approved(mock_metric):
+    from agent.nodes import critique_remediation
+    incident = new_incident(mock_metric, "low")
+    incident["recommended_action"] = "kubectl restart pod api-pod -n production"
+    incident["status"] = "analyzing"
+    
+    # Safe command -> Mock critique approves it
+    res = critique_remediation(incident)
+    assert res["confidence_score"] >= 80
+    assert "approved" in res["critique"]
+    # Should keep status (decide_action will evaluate it next)
+    assert res["status"] == "analyzing"
+
+def test_critique_remediation_rejected(mock_metric):
+    from agent.nodes import critique_remediation
+    incident = new_incident(mock_metric, "low")
+    incident["recommended_action"] = "rm -rf /"
+    incident["status"] = "analyzing"
+    
+    # Unsafe command -> Mock critique blocks it and lowers confidence
+    res = critique_remediation(incident)
+    assert res["confidence_score"] < 80
+    assert "rejected" in res["critique"]
+    # Routing fallback: Low confidence overrides status to awaiting_approval
+    assert res["status"] == "awaiting_approval"

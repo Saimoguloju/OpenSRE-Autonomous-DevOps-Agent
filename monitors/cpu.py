@@ -1,5 +1,5 @@
 import socket
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import List
 
 import psutil
@@ -15,7 +15,7 @@ class CpuMonitor(BaseMonitor):
     def poll(self) -> List[Metric]:
         alerts: List[Metric] = []
         host = socket.gethostname()
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
 
         cpu_pct = psutil.cpu_percent(interval=1)
         if cpu_pct >= config.cpu_threshold_pct:

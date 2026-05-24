@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import Dict, Any, List
 
 from config import config
@@ -20,7 +20,7 @@ def get_cloudwatch_metrics(namespace: str, metric_name: str, instance_id: str, m
             "metric": metric_name,
             "instance_id": instance_id,
             "datapoints": [
-                {"timestamp": (datetime.utcnow() - timedelta(minutes=i)).isoformat(), "value": random.uniform(70, 99)}
+                {"timestamp": (datetime.now(UTC) - timedelta(minutes=i)).isoformat(), "value": random.uniform(70, 99)}
                 for i in range(minutes, 0, -1)
             ],
             "unit": "Percent",
@@ -34,7 +34,7 @@ def get_cloudwatch_metrics(namespace: str, metric_name: str, instance_id: str, m
             aws_access_key_id=config.aws_access_key_id or None,
             aws_secret_access_key=config.aws_secret_access_key or None,
         )
-        end = datetime.utcnow()
+        end = datetime.now(UTC)
         start = end - timedelta(minutes=minutes)
         resp = cw.get_metric_statistics(
             Namespace=namespace,

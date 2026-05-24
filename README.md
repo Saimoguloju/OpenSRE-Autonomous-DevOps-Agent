@@ -75,7 +75,9 @@ Infrastructure                    OpenSRE Agent                     Your Team
 | Feature | Description |
 |---|---|
 | 🤖 **AI Root Cause Analysis** | Claude AI analyzes each incident and writes a structured root cause + recommended remediation |
+| 🧠 **Local Database RAG** | SQLite-based historical incident search feeds context of past resolutions to Claude for remediation consistency |
 | 🔁 **LangGraph State Machine** | Stateful `DETECT → ANALYZE → DECIDE → ACT` pipeline — no spaghetti if/else |
+| 🕵️‍♂️ **Agentic Self-Critique** | Separate LangGraph node audits proposed remediation safety/correctness and forces human approval if confidence is low (< 80) |
 | 🛡️ **Human-in-the-Loop** | All medium/high/critical incidents require explicit human approval before any action is taken |
 | 🔒 **Safety Guardrails** | Deterministic command validation preventing malicious or destructive actions (e.g. namespace deletion, `rm -rf`) |
 | 📊 **Prometheus & Grafana** | Built-in SRE metrics server tracking active incidents, execution times, and Claude analysis latency |

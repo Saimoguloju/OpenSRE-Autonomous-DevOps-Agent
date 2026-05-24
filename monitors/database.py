@@ -1,6 +1,6 @@
 import random
 import socket
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import List
 
 from agent.state import Metric
@@ -26,7 +26,7 @@ class DatabaseMonitor(BaseMonitor):
     def poll(self) -> List[Metric]:
         alerts: List[Metric] = []
         host = socket.gethostname()
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
         self._call_count += 1
 
         if config.simulation_mode:

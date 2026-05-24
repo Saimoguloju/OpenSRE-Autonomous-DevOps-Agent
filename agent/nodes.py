@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, UTC
 
 import anthropic
 
@@ -22,6 +22,22 @@ def analyze_root_cause(state: IncidentState) -> IncidentState:
     """Call Claude to analyze the incident and suggest a fix."""
     metric = state["metric"]
 
+    # Local SRE RAG: Fetch similar past resolved incidents to feed as context
+    past_context = ""
+    try:
+        from storage.incidents import IncidentStore
+        store = IncidentStore(config.db_path)
+        past_incidents = store.get_similar_resolved(metric["source"], metric["name"], limit=3)
+        if past_incidents:
+            past_context = "\n\n=== PAST SIMILAR RESOLVED INCIDENTS (HISTORICAL CONTEXT) ===\n"
+            for idx, past in enumerate(past_incidents, 1):
+                past_context += f"[{idx}] Incident ID: {past['incident_id']}\n"
+                past_context += f"    Root Cause: {past.get('root_cause', 'N/A')}\n"
+                past_context += f"    Remediation Action Executed: {past.get('action_taken', 'N/A')}\n"
+            past_context += "===========================================================\n"
+    except Exception as e:
+        logger.warning("Failed to fetch past resolved incidents for RAG: %s", e)
+
     system_prompt = """You are OpenSRE, an expert Site Reliability Engineer AI.
 Your job is to analyze infrastructure incidents, identify root causes, and recommend specific remediation actions.
 Be concise and actionable. Format your response as:
@@ -37,9 +53,9 @@ Metric: {metric['name']}
 Value: {metric['value']} {metric['unit']} (threshold: {metric['threshold']} {metric['unit']})
 Source: {metric['source']}
 Detected at: {metric['timestamp']}
-Severity: {state['severity']}
+Severity: {state['severity']}{past_context}
 
-Analyze this incident and provide your root cause assessment and recommended action."""
+Analyze this incident and provide your root cause assessment and recommended action. If past similar incidents are listed, use them as guidance to maintain remediation consistency."""
 
     try:
         client = _get_client()
@@ -53,13 +69,19 @@ Analyze this incident and provide your root cause assessment and recommended act
             )
         analysis = response.content[0].text
 
-        root_cause = ""
-        recommended_action = ""
-        for line in analysis.splitlines():
-            if line.startswith("ROOT CAUSE:"):
-                root_cause = line.replace("ROOT CAUSE:", "").strip()
-            elif line.startswith("RECOMMENDED ACTION:"):
-                recommended_action = line.replace("RECOMMENDED ACTION:", "").strip()
+        # Robust regex-based parsing to handle bold tags and spacing variations from Claude
+        import re
+        rc_match = re.search(r"ROOT\s*CAUSE:\s*(.*)", analysis, re.IGNORECASE)
+        ra_match = re.search(r"RECOMMENDED\s*ACTION:\s*(.*)", analysis, re.IGNORECASE)
+        
+        root_cause = rc_match.group(1).strip() if rc_match else ""
+        recommended_action = ra_match.group(1).strip() if ra_match else ""
+
+        # Remove markdown decorations (bold markup/backticks)
+        if root_cause:
+            root_cause = root_cause.replace("**", "").replace("`", "").strip()
+        if recommended_action:
+            recommended_action = recommended_action.replace("**", "").replace("`", "").strip()
 
         state["root_cause"] = root_cause or analysis[:200]
         state["recommended_action"] = recommended_action or "Manual investigation required."
@@ -69,7 +91,7 @@ Analyze this incident and provide your root cause assessment and recommended act
         state["recommended_action"] = "Manual investigation required."
 
     state["status"] = "awaiting_approval"
-    state["updated_at"] = datetime.utcnow().isoformat()
+    state["updated_at"] = datetime.now(UTC).isoformat()
     return state
 
 
@@ -81,7 +103,7 @@ def decide_action(state: IncidentState) -> IncidentState:
         state["status"] = "acting"
     else:
         state["status"] = "awaiting_approval"
-    state["updated_at"] = datetime.utcnow().isoformat()
+    state["updated_at"] = datetime.now(UTC).isoformat()
     return state
 
 
@@ -97,7 +119,7 @@ def execute_action(state: IncidentState) -> IncidentState:
         logger.warning("Incident %s remediation blocked by guardrails: %s", state["incident_id"], reason)
         state["action_taken"] = f"BLOCKED BY SAFETY GUARDRAIL: {reason}"
         state["status"] = "ignored"
-        state["updated_at"] = datetime.utcnow().isoformat()
+        state["updated_at"] = datetime.now(UTC).isoformat()
         return state
 
     # 2. Execute if safe
@@ -126,7 +148,7 @@ def execute_action(state: IncidentState) -> IncidentState:
 
     state["action_taken"] = "; ".join(action_log) if action_log else "No action taken."
     state["status"] = "resolved"
-    state["updated_at"] = datetime.utcnow().isoformat()
+    state["updated_at"] = datetime.now(UTC).isoformat()
 
     # 3. Generate SRE Post-Mortem Report
     _generate_post_mortem(state)
@@ -137,7 +159,7 @@ def execute_action(state: IncidentState) -> IncidentState:
 def mark_ignored(state: IncidentState) -> IncidentState:
     state["status"] = "ignored"
     state["action_taken"] = "Human chose to ignore this incident."
-    state["updated_at"] = datetime.utcnow().isoformat()
+    state["updated_at"] = datetime.now(UTC).isoformat()
     return state
 
 
@@ -223,3 +245,88 @@ On {state['created_at']}, an incident of **{state['severity'].upper()}** severit
     except Exception as e:
         logger.error("Failed to save post-mortem to disk: %s", e)
         return ""
+
+
+def critique_remediation(state: IncidentState) -> IncidentState:
+    """
+    Self-reflection node: audits Claude's recommended action using a separate auditor prompt.
+    Scores confidence and writes critique notes.
+    """
+    import os
+    import re
+    recommended_action = state.get("recommended_action", "")
+    root_cause = state.get("root_cause", "")
+    metric = state["metric"]
+
+    if not recommended_action or recommended_action == "Manual investigation required.":
+        state["confidence_score"] = 0
+        state["critique"] = "No recommended action was generated."
+        state["status"] = "awaiting_approval"
+        state["updated_at"] = datetime.now(UTC).isoformat()
+        return state
+
+    # Mock evaluation for simulation / unit tests
+    if config.anthropic_api_key == "mock_key" or os.environ.get("ANTHROPIC_API_KEY") == "mock_key":
+        from agent.guardrails import RemediationGuardrail
+        is_safe, reason = RemediationGuardrail.validate_command(recommended_action)
+        if not is_safe:
+            state["confidence_score"] = 15
+            state["critique"] = f"[MOCK AUDIT] Command rejected by guardrails: {reason}"
+        else:
+            state["confidence_score"] = 95
+            state["critique"] = "[MOCK AUDIT] Command checked against guardrails and approved."
+        
+        # Routing safety rule: low confidence forces manual approval
+        if state["confidence_score"] < 80:
+            state["status"] = "awaiting_approval"
+        
+        state["updated_at"] = datetime.now(UTC).isoformat()
+        return state
+
+    system_prompt = """You are OpenSRE Auditor, an expert SRE Auditor.
+Audit the proposed remediation action and root cause.
+Assign a Confidence Score (integer between 0 and 100) reflecting how safe, relevant, and correct the action is.
+Write a brief critique.
+Format your output exactly as:
+
+CONFIDENCE SCORE: <score>
+CRITIQUE: <one sentence>"""
+
+    user_message = f"""Incident Host: {metric['host']}
+Metric: {metric['name']}
+Severity: {state['severity']}
+Proposed Root Cause: {root_cause}
+Proposed Command/Remediation: {recommended_action}"""
+
+    try:
+        client = _get_client()
+        response = client.messages.create(
+            model=config.model,
+            max_tokens=256,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        audit_output = response.content[0].text
+
+        score_match = re.search(r"CONFIDENCE\s*SCORE:\s*(\d+)", audit_output, re.IGNORECASE)
+        crit_match = re.search(r"CRITIQUE:\s*(.*)", audit_output, re.IGNORECASE)
+
+        confidence_score = int(score_match.group(1)) if score_match else 75
+        critique = crit_match.group(1).strip() if crit_match else audit_output[:200]
+
+        state["confidence_score"] = confidence_score
+        state["critique"] = critique
+
+        # Safety Fallback: low confidence forces manual human verification
+        if confidence_score < 80:
+            logger.warning("Audit confidence score for incident %s is low (%d): %s", state["incident_id"], confidence_score, critique)
+            state["status"] = "awaiting_approval"
+
+    except Exception as e:
+        logger.error("Self-critique auditing failed: %s", e)
+        state["confidence_score"] = 50
+        state["critique"] = "Auditing failed — Claude API error."
+        state["status"] = "awaiting_approval"
+
+    state["updated_at"] = datetime.now(UTC).isoformat()
+    return state

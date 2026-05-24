@@ -1,5 +1,5 @@
 from typing import TypedDict, Optional, Literal
-from datetime import datetime
+from datetime import datetime, UTC
 
 
 class Metric(TypedDict):
@@ -24,11 +24,13 @@ class IncidentState(TypedDict):
     created_at: str
     updated_at: str
     human_approved: Optional[bool]
+    confidence_score: Optional[int]    # AI Self-reflection confidence score
+    critique: Optional[str]            # AI Self-reflection critique notes
 
 
 def new_incident(metric: Metric, severity: str) -> IncidentState:
     import uuid
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(UTC).isoformat()
     return IncidentState(
         incident_id=str(uuid.uuid4())[:8],
         metric=metric,
@@ -41,4 +43,6 @@ def new_incident(metric: Metric, severity: str) -> IncidentState:
         created_at=now,
         updated_at=now,
         human_approved=None,
+        confidence_score=None,
+        critique=None,
     )

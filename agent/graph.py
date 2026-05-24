@@ -4,7 +4,7 @@ from typing import Literal
 from langgraph.graph import StateGraph, END
 
 from agent.state import IncidentState
-from agent.nodes import analyze_root_cause, decide_action, execute_action, mark_ignored
+from agent.nodes import analyze_root_cause, critique_remediation, decide_action, execute_action, mark_ignored
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +36,15 @@ def build_graph() -> StateGraph:
     graph = StateGraph(IncidentState)
 
     graph.add_node("analyze_root_cause", analyze_root_cause)
+    graph.add_node("critique_remediation", critique_remediation)
     graph.add_node("decide_action", decide_action)
     graph.add_node("await_human", _await_human)
     graph.add_node("execute_action", execute_action)
     graph.add_node("mark_ignored", mark_ignored)
 
     graph.set_entry_point("analyze_root_cause")
-    graph.add_edge("analyze_root_cause", "decide_action")
+    graph.add_edge("analyze_root_cause", "critique_remediation")
+    graph.add_edge("critique_remediation", "decide_action")
     graph.add_conditional_edges("decide_action", _route_after_decide, {
         "execute_action": "execute_action",
         "await_human": "await_human",
