@@ -174,6 +174,16 @@ class IncidentStore:
         scored_incidents.sort(key=lambda x: x[0], reverse=True)
         return [item[1] for item in scored_incidents[:limit]]
 
+    def active_count_by_severity(self) -> dict:
+        """Count incidents that are still open (not resolved/ignored), by severity."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT severity, COUNT(*) AS n FROM incidents "
+                "WHERE status NOT IN ('resolved', 'ignored') "
+                "GROUP BY severity"
+            ).fetchall()
+        return {row["severity"]: row["n"] for row in rows}
+
     def update_status(self, incident_id: str, status: str, **kwargs):
         incident = self.get(incident_id)
         if incident is None:

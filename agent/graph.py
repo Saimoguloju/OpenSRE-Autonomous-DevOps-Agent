@@ -97,6 +97,14 @@ def resume_incident(state: IncidentState) -> IncidentState:
     keeps the human's verdict authoritative.
     """
     approved = state.get("human_approved")
+    if approved is not None:
+        # Record how long the human took to decide (best-effort).
+        try:
+            from agent.metrics import observe_approval
+
+            observe_approval(state["created_at"])
+        except Exception:  # pragma: no cover - metrics are best-effort
+            pass
     if approved is True:
         return execute_action(state)
     if approved is False:

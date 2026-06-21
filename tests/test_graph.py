@@ -1,7 +1,5 @@
 """End-to-end LangGraph pipeline tests with a mocked Claude client."""
 
-import os
-
 import pytest
 
 from config import config

@@ -1,13 +1,10 @@
 import os
 import shutil
-import pytest
-from datetime import datetime, UTC
 
 # Environment is configured in tests/conftest.py (simulation mode + mock key).
 from config import config
-from agent.state import new_incident, IncidentState, Metric
+from agent.state import new_incident
 from agent.guardrails import RemediationGuardrail
-from storage.incidents import IncidentStore
 from agent.nodes import decide_action, execute_action
 from agent.metrics import INCIDENTS_TOTAL, CLAUDE_LATENCY, ACTION_DURATION
 

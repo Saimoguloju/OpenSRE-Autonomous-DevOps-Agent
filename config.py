@@ -61,6 +61,12 @@ class Config:
         default_factory=lambda: os.getenv("TELEGRAM_CHAT_ID", "")
     )
 
+    # ── Discord (optional) ──────────────────────────────────────────────────
+    # Channel → Edit → Integrations → Webhooks → New Webhook → Copy URL
+    discord_webhook_url: str = field(
+        default_factory=lambda: os.getenv("DISCORD_WEBHOOK_URL", "")
+    )
+
     # ── WhatsApp via Twilio (optional) ──────────────────────────────────────
     # Sign up at twilio.com — sandbox is free for testing
     twilio_account_sid: str = field(

@@ -196,6 +196,14 @@ def execute_action(state: IncidentState) -> IncidentState:
     state["status"] = "resolved"
     state["updated_at"] = datetime.now(UTC).isoformat()
 
+    # Record MTTR (creation -> resolution).
+    try:
+        from agent.metrics import observe_resolution
+
+        observe_resolution(state["created_at"])
+    except Exception as e:  # pragma: no cover - metrics are best-effort
+        logger.debug("Failed to record resolution metric: %s", e)
+
     # 3. Generate SRE Post-Mortem Report
     _generate_post_mortem(state)
 
@@ -211,7 +219,6 @@ def mark_ignored(state: IncidentState) -> IncidentState:
 
 def _generate_post_mortem(state: IncidentState) -> str:
     """Generate a structured SRE post-mortem report and save it to disk."""
-    import os
     from pathlib import Path
 
     metric = state["metric"]

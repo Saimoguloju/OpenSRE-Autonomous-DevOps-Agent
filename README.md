@@ -12,7 +12,7 @@
 [![Claude AI](https://img.shields.io/badge/Claude-Anthropic-D97706?style=flat&logo=anthropic&logoColor=white)](https://anthropic.com)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat&logo=docker&logoColor=white)](https://hub.docker.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e?style=flat)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-63%20passing-22c55e?style=flat&logo=pytest&logoColor=white)](tests/)
+[![Tests](https://img.shields.io/badge/tests-74%20passing-22c55e?style=flat&logo=pytest&logoColor=white)](tests/)
 [![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?style=flat&logo=githubactions&logoColor=white)](.github/workflows/ci.yml)
 [![Simulation Mode](https://img.shields.io/badge/Simulation%20Mode-enabled-8b5cf6?style=flat)](#simulation-mode)
 
@@ -86,7 +86,9 @@ Infrastructure                    OpenSRE Agent                     Your Team
 | 🔒 **Safety Guardrails** | Deterministic command validation preventing malicious or destructive actions (e.g. namespace deletion, `rm -rf`) |
 | 📊 **Prometheus & Grafana** | Built-in SRE metrics server tracking active incidents, execution times, and Claude analysis latency |
 | 📝 **Blameless Post-Mortems** | Automatic structured SRE post-mortem generation in markdown format after incident resolution |
-| 📢 **Multi-Channel Alerts** | Slack (interactive buttons), Telegram (Markdown cards), WhatsApp (via Twilio) — all in parallel |
+| 📢 **Multi-Channel Alerts** | Slack & **Telegram** (interactive approve/ignore buttons), WhatsApp (Twilio) and **Discord** (webhook) — all fired in parallel |
+| 🎛️ **Operable CLI** | `--once` (cron/CI), `--dry-run`, `--list-incidents`, `--provider` overrides, and graceful SIGINT/SIGTERM shutdown |
+| 📈 **Rich Observability** | Prometheus metrics (active-incidents gauge, **MTTR**, approval latency, LLM/action latency), a `/healthz` probe, and an auto-provisioned Grafana dashboard |
 | 🔇 **Alert Deduplication** | Fingerprint-based cooldown suppresses duplicate alerts for the same ongoing incident |
 | 🗄️ **Incident Persistence** | Every incident is stored in SQLite with full lifecycle tracking (detected → resolved / ignored) |
 | 🎮 **Simulation Mode** | Runs the full pipeline without any real cloud credentials — perfect for demos and development |
@@ -126,11 +128,15 @@ opensre/
 │   ├── db_tools.py             # psycopg2: kill slow queries, EXPLAIN ANALYZE
 │   └── aws_tools.py            # boto3: CloudWatch metrics, EC2 describe
 │
+├── observability.py            # /metrics + /healthz HTTP server
+├── grafana/                    # Auto-provisioned datasource + OpenSRE dashboard
+│
 ├── notifications/              # Alert channels
 │   ├── dispatcher.py           # Multi-channel fan-out (asyncio.gather)
 │   ├── slack_bot.py            # Slack Block Kit + interactive Fix It / Ignore buttons
-│   ├── telegram_notifier.py    # Telegram Bot API (Markdown messages)
-│   └── whatsapp_notifier.py    # WhatsApp via Twilio REST API
+│   ├── telegram_notifier.py    # Telegram Bot API + inline approve/ignore buttons
+│   ├── whatsapp_notifier.py    # WhatsApp via Twilio REST API
+│   └── discord_notifier.py     # Discord incoming webhook (notify-only)
 │
 ├── storage/
 │   └── incidents.py            # SQLite persistence with upsert + local RAG search
@@ -202,6 +208,19 @@ python main.py
 
 You'll see the ASCII banner and then live incident logs in your terminal. Alerts will fire to every configured channel.
 
+### Command-line options
+
+```bash
+python main.py                      # run continuously (default)
+python main.py --once               # one poll cycle, then exit (cron / CI)
+python main.py --dry-run            # one cycle, simulation, console-only (no listeners)
+python main.py --list-incidents 20  # print recent incidents from the DB and exit
+python main.py --provider openai    # override LLM_PROVIDER for this run
+python main.py --version
+```
+
+`SIGINT` / `SIGTERM` (Ctrl-C, `docker stop`) trigger a **graceful shutdown** — the loop finishes its current work and exits cleanly.
+
 ### Docker (one command)
 
 ```bash
@@ -209,11 +228,26 @@ cp .env.example .env   # fill in ANTHROPIC_API_KEY at minimum
 docker-compose up
 ```
 
+This starts the agent (`:8000` metrics + health), Prometheus (`:9090`), and Grafana (`:3000`, admin/admin) with the **OpenSRE dashboard auto-provisioned**.
+
+---
+
+## 📈 Observability
+
+OpenSRE exposes two endpoints on port `8000`:
+
+| Endpoint | Purpose |
+|---|---|
+| `/metrics` | Prometheus exposition |
+| `/healthz` | JSON liveness/readiness probe (`{status, simulation_mode, llm_provider, model, active_incidents}`) |
+
+**Metrics tracked:** `opensre_incidents_total` (by source/severity/status), `opensre_active_incidents` (gauge), `opensre_incident_resolution_seconds` (**MTTR**), `opensre_approval_latency_seconds`, `opensre_claude_latency_seconds`, and `opensre_action_duration_seconds`. A ready-made Grafana dashboard ([`grafana/dashboards/opensre.json`](grafana/dashboards/opensre.json)) is provisioned automatically via docker-compose.
+
 ---
 
 ## 📢 Notification Channels
 
-OpenSRE supports **three notification channels** out of the box. Each is **optional and independent** — if none are configured, alerts print to the console (great for local development).
+OpenSRE supports **four notification channels** out of the box. Each is **optional and independent** — if none are configured, alerts print to the console (great for local development). **Slack and Telegram** offer interactive approve/ignore buttons; WhatsApp and Discord are notify-only.
 
 All enabled channels receive alerts **simultaneously** using `asyncio.gather`, so a failure in one channel never blocks the others.
 
@@ -261,7 +295,7 @@ Recommended Action:
 
 ### Telegram
 
-> **Best for:** Personal projects, small teams, or when you need free mobile push notifications worldwide.
+> **Best for:** Personal projects, small teams, or free mobile push notifications worldwide. Supports **interactive approve/ignore buttons** (inline keyboard) — a background poller resumes the pipeline on a button press, just like Slack.
 
 **Setup:**
 
@@ -294,6 +328,23 @@ Pod is in CrashLoopBackOff due to repeated OOMKill events.
 
 🛠️ Recommended Action:
 kubectl delete pod api-deployment-7d9f8b-xk2p -n production
+
+[ ✅ Fix It ]  [ 🚫 Ignore ]
+```
+
+---
+
+### Discord
+
+> **Best for:** Teams living in Discord who want incident alerts in a channel. **Notify-only** — incoming webhooks can't render interactive buttons (that needs a full bot app), so approvals happen via Slack or Telegram.
+
+**Setup:**
+
+1. In your server: **Channel → Edit Channel → Integrations → Webhooks → New Webhook**
+2. Copy the webhook URL
+
+```env
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/xxxx/yyyy
 ```
 
 ---
@@ -354,6 +405,7 @@ All configuration is done via environment variables. Set them in your `.env` fil
 | `TWILIO_AUTH_TOKEN` | — | No | Twilio Auth Token |
 | `TWILIO_WHATSAPP_FROM` | `whatsapp:+14155238886` | No | WhatsApp sender number |
 | `WHATSAPP_ALERT_NUMBERS` | — | No | Comma-separated WhatsApp recipients (`whatsapp:+1XXX,...`) |
+| `DISCORD_WEBHOOK_URL` | — | No | Discord incoming webhook URL (notify-only channel) |
 | `AWS_REGION` | `us-east-1` | No | AWS region for CloudWatch / EC2 |
 | `AWS_ACCESS_KEY_ID` | — | No | AWS access key (real mode only) |
 | `AWS_SECRET_ACCESS_KEY` | — | No | AWS secret key (real mode only) |
@@ -506,6 +558,11 @@ self.pagerduty = PagerDutyNotifier()
 - [ ] Incident correlation — group related alerts into a single incident
 
 ### 🚀 v1.4 — Production Hardening (In Progress)
+- [x] Operable CLI (`--once`, `--dry-run`, `--list-incidents`, `--provider`) + graceful shutdown
+- [x] `/healthz` health probe + active-incidents gauge, MTTR & approval-latency metrics
+- [x] Auto-provisioned Grafana dashboard (datasource + panels)
+- [x] Discord notification channel; interactive approval on Telegram (not just Slack)
+- [x] Pluggable multi-provider LLM layer (Anthropic / OpenAI / Gemini)
 - [ ] Web dashboard with live incident feed
 - [x] GitHub Actions CI pipeline (black linting, syntax checking, test runner workflow)
 - [ ] Real AWS CloudWatch monitor integration
@@ -516,10 +573,11 @@ self.pagerduty = PagerDutyNotifier()
 
 ## 🧪 Testing
 
-OpenSRE ships with a comprehensive offline test suite — **63 tests** covering safety
+OpenSRE ships with a comprehensive offline test suite — **74 tests** covering safety
 guardrails, the SQLite store, the local RAG ranking, the decision/critique logic, an
 end-to-end LangGraph run (with a mocked LLM provider), the pluggable provider layer,
-the monitors, config validation, and the notification builders. Everything runs in
+the monitors, config validation, the notification builders, Telegram approval logic,
+the Discord channel, and the observability metrics/health. Everything runs in
 **simulation mode with a mock API key** — no real credentials or network calls.
 
 ```bash

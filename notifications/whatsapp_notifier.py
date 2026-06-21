@@ -17,7 +17,6 @@ Setup:
 """
 
 import logging
-from typing import List
 
 from agent.state import IncidentState
 from config import config
@@ -53,8 +52,8 @@ def _build_whatsapp_message(incident: IncidentState) -> str:
         f"🛠️ Recommended Fix:",
         f"   {incident.get('recommended_action') or 'Pending...'}",
         f"━━━━━━━━━━━━━━━━━━━━━━━━",
-        f"Reply *approve {incident['incident_id']}* to fix",
-        f"Reply *ignore {incident['incident_id']}* to dismiss",
+        f"Approve or ignore from Slack or Telegram",
+        f"(WhatsApp is notify-only).",
     ]
 
     return "\n".join(lines)

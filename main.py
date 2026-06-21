@@ -1,18 +1,27 @@
 """
 OpenSRE — Autonomous DevOps Agent
 Entry point: starts the monitor loop and all notification channels
-(Slack, Telegram, WhatsApp + console fallback).
+(Slack, Telegram, WhatsApp, Discord + console fallback).
 """
 
+import argparse
 import asyncio
 import logging
+import os
+import signal
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 
 # Add project root to path so imports work regardless of cwd
 sys.path.insert(0, str(Path(__file__).parent))
+
+# Make console output UTF-8 safe (banner/emojis crash a cp1252 Windows console).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # Load .env before anything else reads config
 from dotenv import load_dotenv
@@ -136,8 +145,10 @@ async def monitor_loop(
     monitors: list[BaseMonitor],
     store: IncidentStore,
     dispatcher: NotificationDispatcher,
+    stop_event: asyncio.Event,
+    once: bool = False,
 ):
-    """Continuously poll monitors and process any triggered alerts."""
+    """Poll monitors and process alerts until ``stop_event`` is set (or once)."""
     logger.info(
         "OpenSRE monitor loop started. Poll interval: %ds", config.poll_interval_seconds
     )
@@ -147,7 +158,7 @@ async def monitor_loop(
     )
     logger.info("Alert cooldown: %ds per fingerprint", config.alert_cooldown_seconds)
 
-    while True:
+    while not stop_event.is_set():
         for monitor in monitors:
             try:
                 metrics = monitor.poll()
@@ -158,13 +169,136 @@ async def monitor_loop(
             except Exception as e:
                 logger.error("Monitor %s error: %s", monitor.name, e, exc_info=True)
 
-        await asyncio.sleep(config.poll_interval_seconds)
+        # Refresh the active-incidents gauge from the store after each cycle.
+        try:
+            from agent.metrics import refresh_active_incidents
+
+            refresh_active_incidents(store)
+        except Exception as e:
+            logger.debug("Failed to refresh active-incidents gauge: %s", e)
+
+        if once:
+            break
+
+        # Sleep until the next poll, but wake immediately on shutdown.
+        try:
+            await asyncio.wait_for(
+                stop_event.wait(), timeout=config.poll_interval_seconds
+            )
+        except asyncio.TimeoutError:
+            pass
+
+    logger.info("OpenSRE monitor loop stopped.")
+
+
+BANNER = r"""
+ ██████╗ ██████╗ ███████╗███╗   ██╗███████╗██████╗ ███████╗
+██╔═══██╗██╔══██╗██╔════╝████╗  ██║██╔════╝██╔══██╗██╔════╝
+██║   ██║██████╔╝█████╗  ██╔██╗ ██║███████╗██████╔╝█████╗
+██║   ██║██╔═══╝ ██╔══╝  ██║╚██╗██║╚════██║██╔══██╗██╔══╝
+╚██████╔╝██║     ███████╗██║ ╚████║███████║██║  ██║███████╗
+ ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝╚══════╝
+ Autonomous DevOps Agent — Slack · Telegram · WhatsApp · Discord
+"""
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="opensre",
+        description="OpenSRE — autonomous AI Site Reliability Engineer.",
+    )
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run a single poll cycle and exit (useful for cron / CI).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Single cycle in simulation mode, console-only — no listeners started.",
+    )
+    parser.add_argument(
+        "--provider",
+        metavar="NAME",
+        help="Override LLM_PROVIDER for this run (anthropic | openai | google).",
+    )
+    parser.add_argument(
+        "--list-incidents",
+        nargs="?",
+        type=int,
+        const=20,
+        metavar="N",
+        help="Print the N most recent incidents from the store and exit (default 20).",
+    )
+    parser.add_argument(
+        "--version", action="store_true", help="Print the OpenSRE version and exit."
+    )
+    return parser
+
+
+def _print_recent_incidents(store: IncidentStore, limit: int) -> None:
+    incidents = store.list_recent(limit=limit)
+    if not incidents:
+        print("No incidents recorded yet.")
+        return
+    print(f"\n{'ID':<10} {'SEVERITY':<9} {'STATUS':<18} {'METRIC':<16} HOST")
+    print("-" * 80)
+    for inc in incidents:
+        m = inc["metric"]
+        print(
+            f"{inc['incident_id']:<10} {inc['severity']:<9} {inc['status']:<18} "
+            f"{m['name']:<16} {m['host']}"
+        )
+    print()
+
+
+async def _amain(monitors, store, dispatcher, once: bool) -> None:
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, getattr(signal, "SIGTERM", None)):
+        if sig is None:
+            continue
+        try:
+            loop.add_signal_handler(sig, stop_event.set)
+        except (NotImplementedError, AttributeError, ValueError):
+            # Windows / non-main-thread: rely on KeyboardInterrupt instead.
+            pass
+    await monitor_loop(monitors, store, dispatcher, stop_event, once=once)
+
+
 def main():
+    args = _build_arg_parser().parse_args()
+
+    if args.version:
+        print("OpenSRE 1.3.0")
+        return
+
+    # Provider override (applies before config is read by the LLM layer).
+    if args.provider:
+        os.environ["LLM_PROVIDER"] = args.provider
+        config.llm_provider = args.provider
+        try:
+            from llm import reset_cache
+
+            reset_cache()
+        except Exception:
+            pass
+
+    # --list-incidents only reads the DB; no LLM/config validation needed.
+    if args.list_incidents is not None:
+        _print_recent_incidents(IncidentStore(config.db_path), args.list_incidents)
+        return
+
+    dry_run = args.dry_run
+    once = args.once or dry_run
+    if dry_run:
+        config.simulation_mode = True
+        os.environ["SIMULATION_MODE"] = "true"
+        logger.info("Dry-run: forcing simulation mode, single cycle, no listeners.")
+
     try:
         config.validate()
     except ValueError as e:
@@ -172,18 +306,20 @@ def main():
         print("Copy .env.example to .env and fill in your values.\n")
         sys.exit(1)
 
-    # Start Prometheus metrics server
-    try:
-        from prometheus_client import start_http_server
-
-        start_http_server(8000)
-        logger.info("Prometheus metrics server started on port 8000.")
-    except Exception as e:
-        logger.error("Failed to start Prometheus metrics server: %s", e)
-
     store = IncidentStore(config.db_path)
+
+    # Metrics + health server (serves /metrics and /healthz on one port).
+    try:
+        from observability import start_metrics_server
+
+        start_metrics_server(store=store, port=8000)
+    except Exception as e:
+        logger.error("Failed to start metrics/health server: %s", e)
+
     dispatcher = NotificationDispatcher(store=store)
-    dispatcher.start_socket_mode()  # Starts Slack socket mode in a background thread
+    if not dry_run:
+        # Start Slack socket mode + Telegram polling (interactive approvals).
+        dispatcher.start_listeners()
 
     monitors = [
         CpuMonitor(),
@@ -191,17 +327,12 @@ def main():
         KubernetesMonitor(),
     ]
 
-    print("""
- ██████╗ ██████╗ ███████╗███╗   ██╗███████╗██████╗ ███████╗
-██╔═══██╗██╔══██╗██╔════╝████╗  ██║██╔════╝██╔══██╗██╔════╝
-██║   ██║██████╔╝█████╗  ██╔██╗ ██║███████╗██████╔╝█████╗
-██║   ██║██╔═══╝ ██╔══╝  ██║╚██╗██║╚════██║██╔══██╗██╔══╝
-╚██████╔╝██║     ███████╗██║ ╚████║███████║██║  ██║███████╗
- ╚═════╝ ╚═╝     ╚══════╝╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝╚══════╝
- Autonomous DevOps Agent — Slack · Telegram · WhatsApp
-""")
+    print(BANNER)
 
-    asyncio.run(monitor_loop(monitors, store, dispatcher))
+    try:
+        asyncio.run(_amain(monitors, store, dispatcher, once))
+    except KeyboardInterrupt:
+        logger.info("Interrupted — shutting down.")
 
 
 if __name__ == "__main__":

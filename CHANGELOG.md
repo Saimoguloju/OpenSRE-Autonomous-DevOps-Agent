@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Interactive Telegram approvals**: inline Approve/Ignore buttons + a background
+  poller that resumes the pipeline on a button press (previously Slack-only).
+- **Discord notification channel** via incoming webhook (notify-only).
+- **Observability upgrade**: `opensre_active_incidents` gauge, MTTR
+  (`opensre_incident_resolution_seconds`) and approval-latency histograms, a
+  `/healthz` JSON probe served alongside `/metrics`, and an auto-provisioned
+  Grafana dashboard + Prometheus datasource (`grafana/`).
+- **Operable CLI**: `--once`, `--dry-run`, `--list-incidents`, `--provider`,
+  `--version`, plus graceful SIGINT/SIGTERM shutdown of the asyncio loop.
 - **Pluggable multi-provider LLM layer** (`llm/`): choose Anthropic Claude
   (default), OpenAI (and any OpenAI-compatible endpoint — Azure, Groq,
   OpenRouter, Ollama, vLLM — via `OPENAI_BASE_URL`), or Google Gemini with a
@@ -26,6 +35,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   graph run with a mocked Claude client.
 
 ### Fixed
+- Console output is forced to UTF-8, fixing a `UnicodeEncodeError` crash when
+  printing the banner/emojis on a non-UTF-8 (cp1252) Windows console.
+- WhatsApp alerts no longer instruct users to "reply approve" (there was no
+  inbound handler); they now point to Slack/Telegram for approval.
 - The decision node now ties autonomous action to the self-critique confidence
   score instead of an unreachable severity branch (monitors only emit breaches,
   so `severity == "low"` was never produced in the live loop).
