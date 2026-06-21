@@ -25,24 +25,39 @@ def _build_incident_blocks(incident: IncidentState) -> list:
     return [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": f"{emoji} OpenSRE Incident — {incident['severity'].upper()}"},
+            "text": {
+                "type": "plain_text",
+                "text": f"{emoji} OpenSRE Incident — {incident['severity'].upper()}",
+            },
         },
         {
             "type": "section",
             "fields": [
                 {"type": "mrkdwn", "text": f"*Metric:*\n{metric['name']}"},
                 {"type": "mrkdwn", "text": f"*Host:*\n{metric['host']}"},
-                {"type": "mrkdwn", "text": f"*Value:*\n{metric['value']} {metric['unit']} (threshold: {metric['threshold']})"},
-                {"type": "mrkdwn", "text": f"*Incident ID:*\n`{incident['incident_id']}`"},
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Value:*\n{metric['value']} {metric['unit']} (threshold: {metric['threshold']})",
+                },
+                {
+                    "type": "mrkdwn",
+                    "text": f"*Incident ID:*\n`{incident['incident_id']}`",
+                },
             ],
         },
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*Root Cause:*\n{incident.get('root_cause', 'Analyzing...')}"},
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Root Cause:*\n{incident.get('root_cause', 'Analyzing...')}",
+            },
         },
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"*Recommended Action:*\n`{incident.get('recommended_action', 'Pending...')}`"},
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Recommended Action:*\n`{incident.get('recommended_action', 'Pending...')}`",
+            },
         },
         {
             "type": "actions",
@@ -80,15 +95,19 @@ class SlackNotifier:
             try:
                 from slack_bolt import App
                 from slack_bolt.adapter.socket_mode import SocketModeHandler
+
                 self._App = App
                 self._SocketModeHandler = SocketModeHandler
                 self._setup_app()
             except ImportError:
-                logger.warning("slack_bolt not installed — Slack notifications disabled.")
+                logger.warning(
+                    "slack_bolt not installed — Slack notifications disabled."
+                )
                 self._enabled = False
 
     def _setup_app(self):
         from slack_bolt import App
+
         self._app = App(token=config.slack_bot_token)
         self._client = self._app.client
 
@@ -105,8 +124,13 @@ class SlackNotifier:
                         self._resume_incident(incident_id), _main_loop
                     )
                 else:
-                    logger.warning("Main event loop not available — cannot resume incident %s", incident_id)
-            say(f":white_check_mark: Action approved for incident `{incident_id}`. Executing fix...")
+                    logger.warning(
+                        "Main event loop not available — cannot resume incident %s",
+                        incident_id,
+                    )
+            say(
+                f":white_check_mark: Action approved for incident `{incident_id}`. Executing fix..."
+            )
 
         @self._app.action("ignore_action")
         def handle_ignore(ack, body, say):
@@ -118,14 +142,21 @@ class SlackNotifier:
             say(f":no_entry_sign: Incident `{incident_id}` marked as ignored.")
 
     async def _resume_incident(self, incident_id: str):
-        """Re-run the LangGraph agent after human approval."""
+        """
+        Continue the incident after human approval.
+
+        Uses ``resume_incident`` (routes directly to execute/ignore) rather than
+        re-invoking the whole graph, so we don't pay for a second Claude
+        analysis just to run the fix the human already approved.
+        """
         if not self.store:
             return
         incident = self.store.get(incident_id)
         if incident is None:
             return
-        from agent.graph import sre_graph
-        result = sre_graph.invoke(incident)
+        from agent.graph import resume_incident
+
+        result = resume_incident(incident)
         self.store.save(result)
         await self.send_update(result)
 
@@ -152,7 +183,11 @@ class SlackNotifier:
         if not self._enabled or not incident.get("slack_message_ts"):
             return
         try:
-            status_text = f":white_check_mark: Resolved" if incident["status"] == "resolved" else f"Status: {incident['status']}"
+            status_text = (
+                f":white_check_mark: Resolved"
+                if incident["status"] == "resolved"
+                else f"Status: {incident['status']}"
+            )
             self._client.chat_update(
                 channel=config.slack_alert_channel,
                 ts=incident["slack_message_ts"],
@@ -182,7 +217,9 @@ class SlackNotifier:
         """Fallback when Slack is not configured."""
         metric = incident["metric"]
         print("\n" + "=" * 60)
-        print(f"  OPENSRE ALERT [{incident['severity'].upper()}] — {incident['incident_id']}")
+        print(
+            f"  OPENSRE ALERT [{incident['severity'].upper()}] — {incident['incident_id']}"
+        )
         print("=" * 60)
         print(f"  Metric   : {metric['name']} = {metric['value']} {metric['unit']}")
         print(f"  Host     : {metric['host']}")

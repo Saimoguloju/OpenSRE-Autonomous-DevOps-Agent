@@ -4,12 +4,20 @@ from typing import Literal
 from langgraph.graph import StateGraph, END
 
 from agent.state import IncidentState
-from agent.nodes import analyze_root_cause, critique_remediation, decide_action, execute_action, mark_ignored
+from agent.nodes import (
+    analyze_root_cause,
+    critique_remediation,
+    decide_action,
+    execute_action,
+    mark_ignored,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _route_after_decide(state: IncidentState) -> Literal["execute_action", "await_human", END]:
+def _route_after_decide(
+    state: IncidentState,
+) -> Literal["execute_action", "await_human", END]:
     if state["status"] == "acting":
         return "execute_action"
     if state["status"] == "awaiting_approval":
@@ -17,7 +25,9 @@ def _route_after_decide(state: IncidentState) -> Literal["execute_action", "awai
     return END
 
 
-def _route_after_human(state: IncidentState) -> Literal["execute_action", "mark_ignored", END]:
+def _route_after_human(
+    state: IncidentState,
+) -> Literal["execute_action", "mark_ignored", END]:
     if state.get("human_approved") is True:
         return "execute_action"
     if state.get("human_approved") is False:
@@ -45,16 +55,24 @@ def build_graph() -> StateGraph:
     graph.set_entry_point("analyze_root_cause")
     graph.add_edge("analyze_root_cause", "critique_remediation")
     graph.add_edge("critique_remediation", "decide_action")
-    graph.add_conditional_edges("decide_action", _route_after_decide, {
-        "execute_action": "execute_action",
-        "await_human": "await_human",
-        END: END,
-    })
-    graph.add_conditional_edges("await_human", _route_after_human, {
-        "execute_action": "execute_action",
-        "mark_ignored": "mark_ignored",
-        END: END,
-    })
+    graph.add_conditional_edges(
+        "decide_action",
+        _route_after_decide,
+        {
+            "execute_action": "execute_action",
+            "await_human": "await_human",
+            END: END,
+        },
+    )
+    graph.add_conditional_edges(
+        "await_human",
+        _route_after_human,
+        {
+            "execute_action": "execute_action",
+            "mark_ignored": "mark_ignored",
+            END: END,
+        },
+    )
     graph.add_edge("execute_action", END)
     graph.add_edge("mark_ignored", END)
 
@@ -63,3 +81,28 @@ def build_graph() -> StateGraph:
 
 # Singleton compiled graph
 sre_graph = build_graph()
+
+
+def resume_incident(state: IncidentState) -> IncidentState:
+    """
+    Continue an incident after a human decision, WITHOUT re-running the Claude
+    analysis/critique nodes (which already ran when the alert was first raised).
+
+    Routes straight to the terminal action based on ``human_approved``:
+      • True  → execute_action (runs guardrails, then the remediation tool)
+      • False → mark_ignored
+      • None  → no-op (still awaiting a decision)
+
+    This avoids the cost and latency of a second LLM round-trip on approval and
+    keeps the human's verdict authoritative.
+    """
+    approved = state.get("human_approved")
+    if approved is True:
+        return execute_action(state)
+    if approved is False:
+        return mark_ignored(state)
+    logger.info(
+        "Incident %s resumed with no decision yet — leaving as-is.",
+        state["incident_id"],
+    )
+    return state

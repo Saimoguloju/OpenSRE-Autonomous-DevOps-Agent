@@ -12,6 +12,8 @@
 [![Claude AI](https://img.shields.io/badge/Claude-Anthropic-D97706?style=flat&logo=anthropic&logoColor=white)](https://anthropic.com)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat&logo=docker&logoColor=white)](https://hub.docker.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e?style=flat)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-49%20passing-22c55e?style=flat&logo=pytest&logoColor=white)](tests/)
+[![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?style=flat&logo=githubactions&logoColor=white)](.github/workflows/ci.yml)
 [![Simulation Mode](https://img.shields.io/badge/Simulation%20Mode-enabled-8b5cf6?style=flat)](#simulation-mode)
 
 [![GitHub stars](https://img.shields.io/github/stars/Saimoguloju/OpenSRE-Autonomous-DevOps-Agent?style=social)](https://github.com/Saimoguloju/OpenSRE-Autonomous-DevOps-Agent/stargazers)
@@ -62,11 +64,12 @@ Infrastructure                    OpenSRE Agent                     Your Team
 
 1. **Monitors** poll CPU, memory, databases, and Kubernetes every 30 seconds
 2. **Deduplication** suppresses repeated alerts for the same ongoing issue (5-min cooldown)
-3. **LangGraph** runs each breach through a `DETECT → ANALYZE → DECIDE → ACT` state machine
+3. **LangGraph** runs each breach through an `ANALYZE → CRITIQUE → DECIDE → ACT` state machine
 4. **Claude AI** reads the metrics and writes a structured root cause + recommended fix
-5. **Dispatcher** fans out alert cards to **all enabled channels simultaneously** (Slack + Telegram + WhatsApp)
-6. On approval, OpenSRE executes the fix (scale deployment, kill query, restart pod)
-7. Resolution notifications are sent to all channels automatically
+5. **Self-critique** audits the proposed fix and scores confidence (0–100); low confidence always escalates to a human
+6. **Dispatcher** fans out alert cards to **all enabled channels simultaneously** (Slack + Telegram + WhatsApp)
+7. On approval (or autonomously, when `AUTO_REMEDIATE` is enabled for non-critical, high-confidence incidents), OpenSRE executes the fix (scale deployment, kill query, restart pod)
+8. Resolution notifications are sent to all channels automatically
 
 ---
 
@@ -122,22 +125,35 @@ opensre/
 │   ├── telegram_notifier.py    # Telegram Bot API (Markdown messages)
 │   └── whatsapp_notifier.py    # WhatsApp via Twilio REST API
 │
-└── storage/
-    └── incidents.py            # SQLite persistence with upsert + full CRUD
+├── storage/
+│   └── incidents.py            # SQLite persistence with upsert + local RAG search
+│
+└── tests/                      # Offline pytest suite (simulation mode, mock Claude)
+    ├── conftest.py             # Shared fixtures + hermetic test environment
+    ├── test_agent.py           # Guardrails, storage, decision/critique, RAG
+    ├── test_graph.py           # End-to-end LangGraph run with a mocked client
+    ├── test_monitors.py        # Severity formula + per-monitor polling
+    ├── test_config.py          # Config parsing & validation
+    └── test_notifications.py   # Message builders + dispatcher fan-out
 ```
+
+Project hygiene: [`LICENSE`](LICENSE) (MIT) · [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) · [`SECURITY.md`](SECURITY.md) · [`CHANGELOG.md`](CHANGELOG.md) · [`pyproject.toml`](pyproject.toml) · GitHub issue/PR templates.
 
 ### LangGraph Flow
 
 ```mermaid
 graph LR
-    A([🔍 analyze_root_cause\nClaude AI]) --> B([⚖️ decide_action])
-    B -->|low severity + sim mode| C([⚙️ execute_action])
-    B -->|medium / high / critical| D([⏳ await_human\nSlack · Telegram · WhatsApp])
+    A([🔍 analyze_root_cause\nClaude AI]) --> G([🕵️ critique_remediation\nconfidence 0-100])
+    G --> B([⚖️ decide_action])
+    B -->|auto-remediate + high confidence + non-critical| C([⚙️ execute_action])
+    B -->|otherwise| D([⏳ await_human\nSlack · Telegram · WhatsApp])
     D -->|✅ Fix It| C
     D -->|🚫 Ignore| E([🚫 mark_ignored])
     C --> F([END])
     E --> F
 ```
+
+> **Safety default:** `AUTO_REMEDIATE` is **off** out of the box, so *every* incident waits for explicit human approval. Enable it only when you want hands-off remediation for non-critical, high-confidence incidents in simulation mode.
 
 ---
 
@@ -307,6 +323,8 @@ All configuration is done via environment variables. Set them in your `.env` fil
 | `ANTHROPIC_API_KEY` | — | **Yes** | Your Claude API key from [console.anthropic.com](https://console.anthropic.com) |
 | `OPENSRE_MODEL` | `claude-sonnet-4-6` | No | Claude model to use for analysis |
 | `SIMULATION_MODE` | `true` | No | `true` = no real cloud credentials needed |
+| `AUTO_REMEDIATE` | `false` | No | `true` lets the agent auto-execute fixes for non-critical, high-confidence incidents (simulation mode only). Default keeps human-in-the-loop for everything. |
+| `AUTO_APPROVE_MIN_CONFIDENCE` | `80` | No | Minimum self-critique confidence (0–100) required for autonomous action |
 | `POLL_INTERVAL_SECONDS` | `30` | No | How often to poll all monitors |
 | `ALERT_COOLDOWN_SECONDS` | `300` | No | Seconds to suppress duplicate alerts for same metric+host |
 | `CPU_THRESHOLD_PCT` | `85` | No | Alert when CPU exceeds this % |
@@ -424,9 +442,10 @@ self.pagerduty = PagerDutyNotifier()
 - [ ] OpenTelemetry distributed tracing across LangGraph nodes
 
 ### 🚀 v1.3 — Smarter AI (In Progress)
-- [ ] Confidence scoring — low-confidence analysis always requires human approval
-- [ ] RAG on past incidents — Claude reads similar historical incidents before analyzing
+- [x] Confidence scoring — low-confidence analysis always requires human approval
+- [x] RAG on past incidents — Claude reads similar historical incidents before analyzing
 - [x] Auto post-mortem generation after incident resolution
+- [x] Opt-in autonomous remediation gated on confidence + severity (`AUTO_REMEDIATE`)
 - [ ] Incident correlation — group related alerts into a single incident
 
 ### 🚀 v1.4 — Production Hardening (In Progress)
@@ -438,9 +457,28 @@ self.pagerduty = PagerDutyNotifier()
 
 ---
 
+## 🧪 Testing
+
+OpenSRE ships with a comprehensive offline test suite — **49 tests** covering safety
+guardrails, the SQLite store, the local RAG ranking, the decision/critique logic, an
+end-to-end LangGraph run (with a mocked Claude client), the monitors, config
+validation, and the notification builders. Everything runs in **simulation mode with a
+mock API key** — no real credentials or network calls.
+
+```bash
+pip install -r requirements-dev.txt
+pytest                                   # run the suite
+pytest --cov=. --cov-report=term-missing # with coverage
+```
+
+The same suite runs in CI on Python 3.12 and 3.13, gated by `black` formatting and
+`flake8` linting — see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+---
+
 ## 🤝 Contributing
 
-Contributions are welcome and appreciated! This is an open learning project — whether you're fixing a bug, adding a new monitor, or improving documentation, all PRs are reviewed.
+Contributions are welcome and appreciated! This is an open learning project — whether you're fixing a bug, adding a new monitor, or improving documentation, all PRs are reviewed. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full workflow, and our **[Code of Conduct](CODE_OF_CONDUCT.md)**.
 
 **Getting Started:**
 

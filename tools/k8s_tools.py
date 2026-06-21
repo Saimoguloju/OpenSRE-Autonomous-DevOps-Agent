@@ -15,8 +15,7 @@ def _kubectl(args: List[str]) -> str:
         return f"[SIMULATION] {cmd_str} → OK"
     try:
         result = subprocess.run(
-            ["kubectl"] + args,
-            capture_output=True, text=True, timeout=30
+            ["kubectl"] + args, capture_output=True, text=True, timeout=30
         )
         if result.returncode != 0:
             return f"kubectl error: {result.stderr.strip()}"
@@ -32,8 +31,12 @@ def restart_pod(pod_name: str, namespace: str = "production") -> str:
     return f"Restarted pod {pod_name}: {result}"
 
 
-def scale_deployment(deployment: str, replicas: int, namespace: str = "production") -> str:
-    result = _kubectl(["scale", "deployment", deployment, f"--replicas={replicas}", "-n", namespace])
+def scale_deployment(
+    deployment: str, replicas: int, namespace: str = "production"
+) -> str:
+    result = _kubectl(
+        ["scale", "deployment", deployment, f"--replicas={replicas}", "-n", namespace]
+    )
     return f"Scaled {deployment} to {replicas} replicas: {result}"
 
 
@@ -46,5 +49,7 @@ def get_pods(namespace: str = "production") -> str:
 
 
 def rollout_restart(deployment: str, namespace: str = "production") -> str:
-    result = _kubectl(["rollout", "restart", f"deployment/{deployment}", "-n", namespace])
+    result = _kubectl(
+        ["rollout", "restart", f"deployment/{deployment}", "-n", namespace]
+    )
     return f"Rollout restart of {deployment}: {result}"

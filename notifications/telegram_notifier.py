@@ -8,6 +8,7 @@ Setup:
   3. Get your chat_id: https://api.telegram.org/bot<TOKEN>/getUpdates
   4. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in your .env
 """
+
 import logging
 from typing import Optional
 
@@ -81,8 +82,11 @@ class TelegramNotifier:
         if self._enabled:
             try:
                 from telegram import Bot
+
                 self._bot = Bot(token=config.telegram_bot_token)
-                logger.info("Telegram notifier enabled → chat_id=%s", config.telegram_chat_id)
+                logger.info(
+                    "Telegram notifier enabled → chat_id=%s", config.telegram_chat_id
+                )
             except ImportError:
                 logger.warning(
                     "python-telegram-bot not installed — Telegram notifications disabled. "

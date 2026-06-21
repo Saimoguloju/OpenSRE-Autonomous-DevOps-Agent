@@ -15,6 +15,7 @@ Setup:
 
   Production: Replace TWILIO_WHATSAPP_FROM with your approved WhatsApp Business number.
 """
+
 import logging
 from typing import List
 
@@ -82,7 +83,10 @@ class WhatsAppNotifier:
         if self._enabled:
             try:
                 from twilio.rest import Client
-                self._client = Client(config.twilio_account_sid, config.twilio_auth_token)
+
+                self._client = Client(
+                    config.twilio_account_sid, config.twilio_auth_token
+                )
                 logger.info(
                     "WhatsApp notifier enabled → %d recipient(s)",
                     len(config.whatsapp_recipients),
@@ -111,7 +115,8 @@ class WhatsAppNotifier:
                 )
                 logger.info(
                     "WhatsApp alert sent to %s for incident %s",
-                    recipient, incident["incident_id"],
+                    recipient,
+                    incident["incident_id"],
                 )
             except Exception as e:
                 logger.error("WhatsApp send_alert failed for %s: %s", recipient, e)
@@ -136,7 +141,8 @@ class WhatsAppNotifier:
                 )
                 logger.info(
                     "WhatsApp update sent to %s for incident %s",
-                    recipient, incident["incident_id"],
+                    recipient,
+                    incident["incident_id"],
                 )
             except Exception as e:
                 logger.error("WhatsApp send_update failed for %s: %s", recipient, e)

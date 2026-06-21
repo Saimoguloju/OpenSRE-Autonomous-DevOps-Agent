@@ -3,6 +3,7 @@ OpenSRE — Autonomous DevOps Agent
 Entry point: starts the monitor loop and all notification channels
 (Slack, Telegram, WhatsApp + console fallback).
 """
+
 import asyncio
 import logging
 import sys
@@ -15,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 # Load .env before anything else reads config
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from config import config
@@ -58,7 +60,8 @@ def _is_duplicate(metric: dict) -> bool:
     if now < expires_at:
         logger.debug(
             "Duplicate alert suppressed: %s (cooldown %.0fs remaining)",
-            fingerprint, expires_at - now,
+            fingerprint,
+            expires_at - now,
         )
         return True
 
@@ -76,21 +79,25 @@ def _clear_cooldown(metric: dict):
 
 # ── Core pipeline ────────────────────────────────────────────────────────────
 
+
 async def process_metric(
     metric: dict,
     store: IncidentStore,
     dispatcher: NotificationDispatcher,
 ):
     """Run one metric through the full LangGraph pipeline and notify all channels."""
-    # Severity uses BaseMonitor's ratio formula
-    monitor = BaseMonitor.__new__(BaseMonitor)
-    severity = monitor.severity(metric["value"], metric["threshold"])
+    # Severity uses BaseMonitor's ratio formula (static — no instance needed)
+    severity = BaseMonitor.severity(metric["value"], metric["threshold"])
 
     incident = new_incident(metric, severity)
     store.save(incident)
     logger.info(
         "Incident %s created — %s = %.1f %s (severity: %s)",
-        incident["incident_id"], metric["name"], metric["value"], metric["unit"], severity,
+        incident["incident_id"],
+        metric["name"],
+        metric["value"],
+        metric["unit"],
+        severity,
     )
 
     # Run LangGraph: ANALYZE → DECIDE (→ EXECUTE or AWAIT_HUMAN)
@@ -100,10 +107,9 @@ async def process_metric(
     # Record incident metric
     try:
         from agent.metrics import INCIDENTS_TOTAL
+
         INCIDENTS_TOTAL.labels(
-            source=metric["source"],
-            severity=severity,
-            status=result["status"]
+            source=metric["source"], severity=severity, status=result["status"]
         ).inc()
     except Exception as e:
         logger.error("Failed to record incident metric: %s", e)
@@ -111,7 +117,9 @@ async def process_metric(
     # Broadcast to all enabled channels (Slack + Telegram + WhatsApp + console)
     slack_ts = await dispatcher.send_alert(result)
     if slack_ts:
-        store.update_status(result["incident_id"], result["status"], slack_message_ts=slack_ts)
+        store.update_status(
+            result["incident_id"], result["status"], slack_message_ts=slack_ts
+        )
 
     # Auto-resolved low-severity incidents get an immediate resolution notification
     if result["status"] == "resolved":
@@ -119,7 +127,8 @@ async def process_metric(
         _clear_cooldown(metric)  # allow fresh alert if same issue recurs later
         logger.info(
             "Incident %s auto-resolved: %s",
-            result["incident_id"], result.get("action_taken"),
+            result["incident_id"],
+            result.get("action_taken"),
         )
 
 
@@ -129,7 +138,9 @@ async def monitor_loop(
     dispatcher: NotificationDispatcher,
 ):
     """Continuously poll monitors and process any triggered alerts."""
-    logger.info("OpenSRE monitor loop started. Poll interval: %ds", config.poll_interval_seconds)
+    logger.info(
+        "OpenSRE monitor loop started. Poll interval: %ds", config.poll_interval_seconds
+    )
     logger.info("Simulation mode: %s", config.simulation_mode)
     logger.info("Model: %s", config.model)
     logger.info("Alert cooldown: %ds per fingerprint", config.alert_cooldown_seconds)
@@ -150,6 +161,7 @@ async def monitor_loop(
 
 # ── Entry point ──────────────────────────────────────────────────────────────
 
+
 def main():
     try:
         config.validate()
@@ -161,6 +173,7 @@ def main():
     # Start Prometheus metrics server
     try:
         from prometheus_client import start_http_server
+
         start_http_server(8000)
         logger.info("Prometheus metrics server started on port 8000.")
     except Exception as e:

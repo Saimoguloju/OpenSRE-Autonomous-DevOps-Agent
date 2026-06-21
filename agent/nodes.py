@@ -26,15 +26,22 @@ def analyze_root_cause(state: IncidentState) -> IncidentState:
     past_context = ""
     try:
         from storage.incidents import IncidentStore
+
         store = IncidentStore(config.db_path)
-        past_incidents = store.get_similar_resolved(metric["source"], metric["name"], limit=3)
+        past_incidents = store.get_similar_resolved(
+            metric["source"], metric["name"], limit=3
+        )
         if past_incidents:
-            past_context = "\n\n=== PAST SIMILAR RESOLVED INCIDENTS (HISTORICAL CONTEXT) ===\n"
+            past_context = (
+                "\n\n=== PAST SIMILAR RESOLVED INCIDENTS (HISTORICAL CONTEXT) ===\n"
+            )
             for idx, past in enumerate(past_incidents, 1):
                 past_context += f"[{idx}] Incident ID: {past['incident_id']}\n"
                 past_context += f"    Root Cause: {past.get('root_cause', 'N/A')}\n"
                 past_context += f"    Remediation Action Executed: {past.get('action_taken', 'N/A')}\n"
-            past_context += "===========================================================\n"
+            past_context += (
+                "===========================================================\n"
+            )
     except Exception as e:
         logger.warning("Failed to fetch past resolved incidents for RAG: %s", e)
 
@@ -60,6 +67,7 @@ Analyze this incident and provide your root cause assessment and recommended act
     try:
         client = _get_client()
         from agent.metrics import CLAUDE_LATENCY
+
         with CLAUDE_LATENCY.time():
             response = client.messages.create(
                 model=config.model,
@@ -71,9 +79,10 @@ Analyze this incident and provide your root cause assessment and recommended act
 
         # Robust regex-based parsing to handle bold tags and spacing variations from Claude
         import re
+
         rc_match = re.search(r"ROOT\s*CAUSE:\s*(.*)", analysis, re.IGNORECASE)
         ra_match = re.search(r"RECOMMENDED\s*ACTION:\s*(.*)", analysis, re.IGNORECASE)
-        
+
         root_cause = rc_match.group(1).strip() if rc_match else ""
         recommended_action = ra_match.group(1).strip() if ra_match else ""
 
@@ -81,10 +90,14 @@ Analyze this incident and provide your root cause assessment and recommended act
         if root_cause:
             root_cause = root_cause.replace("**", "").replace("`", "").strip()
         if recommended_action:
-            recommended_action = recommended_action.replace("**", "").replace("`", "").strip()
+            recommended_action = (
+                recommended_action.replace("**", "").replace("`", "").strip()
+            )
 
         state["root_cause"] = root_cause or analysis[:200]
-        state["recommended_action"] = recommended_action or "Manual investigation required."
+        state["recommended_action"] = (
+            recommended_action or "Manual investigation required."
+        )
     except Exception as e:
         logger.error("Claude analysis failed: %s", e)
         state["root_cause"] = "Analysis unavailable — Claude API error."
@@ -96,13 +109,41 @@ Analyze this incident and provide your root cause assessment and recommended act
 
 
 def decide_action(state: IncidentState) -> IncidentState:
-    """Determine if we can auto-act or need human approval."""
-    # Auto-act only on low-severity incidents in simulation mode
-    if state["severity"] == "low" and config.simulation_mode:
+    """
+    Decide whether the agent may act autonomously or must escalate to a human.
+
+    Default posture is SAFE: unless ``AUTO_REMEDIATE`` is explicitly enabled,
+    every incident requires human approval. When auto-remediation is enabled
+    (simulation mode only), the agent may act on its own *only* when the
+    incident is non-critical AND the self-critique confidence score clears the
+    configured threshold — tying the decision to the ``critique_remediation``
+    node's audit instead of severity alone.
+    """
+    severity = state["severity"]
+    confidence = state.get("confidence_score")
+    high_confidence = (
+        confidence is not None and confidence >= config.auto_approve_min_confidence
+    )
+
+    auto_ok = (
+        config.simulation_mode
+        and config.auto_remediate
+        and severity != "critical"
+        and high_confidence
+    )
+
+    if auto_ok:
         state["human_approved"] = True
         state["status"] = "acting"
+        logger.info(
+            "Incident %s auto-approved (severity=%s, confidence=%s) — acting autonomously.",
+            state["incident_id"],
+            severity,
+            confidence,
+        )
     else:
         state["status"] = "awaiting_approval"
+
     state["updated_at"] = datetime.now(UTC).isoformat()
     return state
 
@@ -114,9 +155,16 @@ def execute_action(state: IncidentState) -> IncidentState:
 
     # 1. Run Safety Guardrails before execution
     from agent.guardrails import RemediationGuardrail
-    is_safe, reason = RemediationGuardrail.validate_command(state.get("recommended_action", ""))
+
+    is_safe, reason = RemediationGuardrail.validate_command(
+        state.get("recommended_action", "")
+    )
     if not is_safe:
-        logger.warning("Incident %s remediation blocked by guardrails: %s", state["incident_id"], reason)
+        logger.warning(
+            "Incident %s remediation blocked by guardrails: %s",
+            state["incident_id"],
+            reason,
+        )
         state["action_taken"] = f"BLOCKED BY SAFETY GUARDRAIL: {reason}"
         state["status"] = "ignored"
         state["updated_at"] = datetime.now(UTC).isoformat()
@@ -124,25 +172,30 @@ def execute_action(state: IncidentState) -> IncidentState:
 
     # 2. Execute if safe
     from agent.metrics import ACTION_DURATION
+
     with ACTION_DURATION.time():
         if metric["source"] == "cpu":
             from tools.k8s_tools import scale_deployment
+
             result = scale_deployment("api-deployment", replicas=3)
             action_log.append(result)
 
         elif metric["source"] == "database":
             from tools.db_tools import kill_slow_queries
+
             result = kill_slow_queries()
             action_log.append(result)
 
         elif metric["source"] == "kubernetes":
             from tools.k8s_tools import restart_pod
+
             pod_name = metric["host"].split("/")[-1]
             result = restart_pod(pod_name)
             action_log.append(result)
 
         elif metric["source"] == "memory":
             from tools.k8s_tools import restart_pod
+
             result = restart_pod("api-deployment")
             action_log.append(result)
 
@@ -167,10 +220,10 @@ def _generate_post_mortem(state: IncidentState) -> str:
     """Generate a structured SRE post-mortem report and save it to disk."""
     import os
     from pathlib import Path
-    
+
     metric = state["metric"]
     incident_id = state["incident_id"]
-    
+
     system_prompt = """You are OpenSRE, an expert SRE Post-Mortem Writer.
 Your job is to write a detailed, blameless SRE Post-Mortem Report in Markdown format based on the incident state.
 The report must include sections:
@@ -206,8 +259,11 @@ Resolved At: {state['updated_at']}
         )
         post_mortem_content = response.content[0].text
     except Exception as e:
-        logger.warning("Could not generate SRE post-mortem using Claude: %s. Falling back to template.", e)
-        
+        logger.warning(
+            "Could not generate SRE post-mortem using Claude: %s. Falling back to template.",
+            e,
+        )
+
         # Markdown template fallback
         post_mortem_content = f"""# SRE Post-Mortem Report (Blameless)
 ## Incident ID: {incident_id}
@@ -254,6 +310,7 @@ def critique_remediation(state: IncidentState) -> IncidentState:
     """
     import os
     import re
+
     recommended_action = state.get("recommended_action", "")
     root_cause = state.get("root_cause", "")
     metric = state["metric"]
@@ -266,20 +323,26 @@ def critique_remediation(state: IncidentState) -> IncidentState:
         return state
 
     # Mock evaluation for simulation / unit tests
-    if config.anthropic_api_key == "mock_key" or os.environ.get("ANTHROPIC_API_KEY") == "mock_key":
+    if (
+        config.anthropic_api_key == "mock_key"
+        or os.environ.get("ANTHROPIC_API_KEY") == "mock_key"
+    ):
         from agent.guardrails import RemediationGuardrail
+
         is_safe, reason = RemediationGuardrail.validate_command(recommended_action)
         if not is_safe:
             state["confidence_score"] = 15
             state["critique"] = f"[MOCK AUDIT] Command rejected by guardrails: {reason}"
         else:
             state["confidence_score"] = 95
-            state["critique"] = "[MOCK AUDIT] Command checked against guardrails and approved."
-        
+            state["critique"] = (
+                "[MOCK AUDIT] Command checked against guardrails and approved."
+            )
+
         # Routing safety rule: low confidence forces manual approval
         if state["confidence_score"] < 80:
             state["status"] = "awaiting_approval"
-        
+
         state["updated_at"] = datetime.now(UTC).isoformat()
         return state
 
@@ -308,7 +371,9 @@ Proposed Command/Remediation: {recommended_action}"""
         )
         audit_output = response.content[0].text
 
-        score_match = re.search(r"CONFIDENCE\s*SCORE:\s*(\d+)", audit_output, re.IGNORECASE)
+        score_match = re.search(
+            r"CONFIDENCE\s*SCORE:\s*(\d+)", audit_output, re.IGNORECASE
+        )
         crit_match = re.search(r"CRITIQUE:\s*(.*)", audit_output, re.IGNORECASE)
 
         confidence_score = int(score_match.group(1)) if score_match else 75
@@ -319,7 +384,12 @@ Proposed Command/Remediation: {recommended_action}"""
 
         # Safety Fallback: low confidence forces manual human verification
         if confidence_score < 80:
-            logger.warning("Audit confidence score for incident %s is low (%d): %s", state["incident_id"], confidence_score, critique)
+            logger.warning(
+                "Audit confidence score for incident %s is low (%d): %s",
+                state["incident_id"],
+                confidence_score,
+                critique,
+            )
             state["status"] = "awaiting_approval"
 
     except Exception as e:

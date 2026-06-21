@@ -10,24 +10,37 @@ def get_slow_queries() -> List[dict]:
     """Return currently running slow queries."""
     if config.simulation_mode:
         from monitors.database import DatabaseMonitor
+
         return DatabaseMonitor().get_slow_queries()
 
     try:
         import psycopg2
+
         conn = psycopg2.connect(config.db_url)
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT pid, now() - query_start AS duration, query, state
             FROM pg_stat_activity
             WHERE state != 'idle'
               AND query_start IS NOT NULL
               AND now() - query_start > interval '%s milliseconds'
             ORDER BY duration DESC
-        """, (config.slow_query_threshold_ms,))
+        """,
+            (config.slow_query_threshold_ms,),
+        )
         rows = cur.fetchall()
         cur.close()
         conn.close()
-        return [{"pid": r[0], "duration_ms": r[1].total_seconds() * 1000, "query": r[2], "state": r[3]} for r in rows]
+        return [
+            {
+                "pid": r[0],
+                "duration_ms": r[1].total_seconds() * 1000,
+                "query": r[2],
+                "state": r[3],
+            }
+            for r in rows
+        ]
     except Exception as e:
         logger.error("get_slow_queries failed: %s", e)
         return []
@@ -46,6 +59,7 @@ def kill_slow_queries() -> str:
 
     try:
         import psycopg2
+
         conn = psycopg2.connect(config.db_url)
         cur = conn.cursor()
         killed = []
@@ -67,6 +81,7 @@ def explain_query(query: str) -> str:
         return f"[SIMULATION] EXPLAIN for: {query[:80]}...\nSeq Scan on orders (cost=0.00..45231.00 rows=1000000 width=8)\nMissing index on user_id column."
     try:
         import psycopg2
+
         conn = psycopg2.connect(config.db_url)
         cur = conn.cursor()
         cur.execute(f"EXPLAIN ANALYZE {query}")

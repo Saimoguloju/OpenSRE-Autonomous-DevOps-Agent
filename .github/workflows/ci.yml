@@ -10,8 +10,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.12"]
+        python-version: ["3.12", "3.13"]
 
     steps:
     - uses: actions/checkout@v4
@@ -25,25 +26,21 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest flake8 black
+        pip install -r requirements-dev.txt
 
     - name: Lint with black
-      run: |
-        # check formatting
-        black --check . --exclude venv/
+      run: black --check . --exclude venv/
 
     - name: Lint with flake8
       run: |
-        # stop the build if there are Python syntax errors or undefined names
+        # Fail the build on syntax errors or undefined names.
         flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude venv/
-        # exit-zero treats all errors as warnings.
+        # Treat everything else as warnings (non-blocking).
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics --exclude venv/
 
-    - name: Run unit tests
-      run: |
-        pytest tests/
+    - name: Run unit tests with coverage
+      run: pytest --cov=. --cov-report=term-missing --cov-report=xml
       env:
-        ANTHROPIC_API_KEY: "mock_api_key"
+        ANTHROPIC_API_KEY: "mock_key"
         SIMULATION_MODE: "true"
         OPENSRE_DB_PATH: "test_incidents.db"

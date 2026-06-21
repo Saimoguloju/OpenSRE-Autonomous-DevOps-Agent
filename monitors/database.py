@@ -7,12 +7,20 @@ from agent.state import Metric
 from config import config
 from monitors.base import BaseMonitor
 
-
 # Simulated slow queries — in production, replace with real DB polling
 SIMULATED_QUERIES = [
-    {"query": "SELECT * FROM orders JOIN users ON orders.user_id = users.id WHERE status='pending'", "duration_ms": 2400},
-    {"query": "UPDATE inventory SET stock=stock-1 WHERE product_id IN (SELECT product_id FROM cart)", "duration_ms": 890},
-    {"query": "SELECT COUNT(*) FROM logs WHERE created_at > NOW() - INTERVAL '1 day'", "duration_ms": 3100},
+    {
+        "query": "SELECT * FROM orders JOIN users ON orders.user_id = users.id WHERE status='pending'",
+        "duration_ms": 2400,
+    },
+    {
+        "query": "UPDATE inventory SET stock=stock-1 WHERE product_id IN (SELECT product_id FROM cart)",
+        "duration_ms": 890,
+    },
+    {
+        "query": "SELECT COUNT(*) FROM logs WHERE created_at > NOW() - INTERVAL '1 day'",
+        "duration_ms": 3100,
+    },
     {"query": "DELETE FROM sessions WHERE expires_at < NOW()", "duration_ms": 1200},
 ]
 
@@ -35,15 +43,17 @@ class DatabaseMonitor(BaseMonitor):
                 query_info = random.choice(SIMULATED_QUERIES)
                 duration_ms = query_info["duration_ms"] + random.randint(-100, 100)
                 if duration_ms >= config.slow_query_threshold_ms:
-                    alerts.append(Metric(
-                        source="database",
-                        name="slow_query",
-                        value=float(duration_ms),
-                        threshold=float(config.slow_query_threshold_ms),
-                        unit="ms",
-                        host=f"{host}:5432",
-                        timestamp=now,
-                    ))
+                    alerts.append(
+                        Metric(
+                            source="database",
+                            name="slow_query",
+                            value=float(duration_ms),
+                            threshold=float(config.slow_query_threshold_ms),
+                            unit="ms",
+                            host=f"{host}:5432",
+                            timestamp=now,
+                        )
+                    )
         return alerts
 
     def get_slow_queries(self) -> List[dict]:

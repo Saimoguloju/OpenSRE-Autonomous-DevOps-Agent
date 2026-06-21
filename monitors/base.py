@@ -11,7 +11,12 @@ class BaseMonitor(ABC):
         """Poll for metrics. Returns list of Metric dicts that breach thresholds."""
         ...
 
-    def severity(self, value: float, threshold: float) -> str:
+    @staticmethod
+    def severity(value: float, threshold: float) -> str:
+        """Classify a breach by how far the value exceeds its threshold."""
+        if threshold <= 0:
+            # Avoid division by zero; any positive value is at least critical.
+            return "critical" if value > 0 else "low"
         ratio = value / threshold
         if ratio >= 1.5:
             return "critical"

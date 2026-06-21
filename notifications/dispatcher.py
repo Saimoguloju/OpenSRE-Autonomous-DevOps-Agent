@@ -10,6 +10,7 @@ Add a new channel by:
   1. Create notifications/<channel>_notifier.py with send_alert() / send_update()
   2. Import and register it in NotificationDispatcher.__init__()
 """
+
 import asyncio
 import logging
 from typing import Optional
@@ -63,8 +64,16 @@ class NotificationDispatcher:
             self.slack.send_alert(incident), name="slack_alert"
         )
         tasks.append(slack_task)
-        tasks.append(asyncio.create_task(self.telegram.send_alert(incident), name="telegram_alert"))
-        tasks.append(asyncio.create_task(self.whatsapp.send_alert(incident), name="whatsapp_alert"))
+        tasks.append(
+            asyncio.create_task(
+                self.telegram.send_alert(incident), name="telegram_alert"
+            )
+        )
+        tasks.append(
+            asyncio.create_task(
+                self.whatsapp.send_alert(incident), name="whatsapp_alert"
+            )
+        )
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 

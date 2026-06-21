@@ -36,14 +36,17 @@ class IncidentStore:
             cursor = conn.execute("PRAGMA table_info(incidents)")
             columns = [row["name"] for row in cursor.fetchall()]
             if "confidence_score" not in columns:
-                conn.execute("ALTER TABLE incidents ADD COLUMN confidence_score INTEGER")
+                conn.execute(
+                    "ALTER TABLE incidents ADD COLUMN confidence_score INTEGER"
+                )
             if "critique" not in columns:
                 conn.execute("ALTER TABLE incidents ADD COLUMN critique TEXT")
             conn.commit()
 
     def save(self, incident: IncidentState):
         with self._connect() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO incidents (
                     incident_id, metric_json, severity, root_cause,
                     recommended_action, action_taken, status,
@@ -60,21 +63,27 @@ class IncidentStore:
                     updated_at=excluded.updated_at,
                     confidence_score=excluded.confidence_score,
                     critique=excluded.critique
-            """, (
-                incident["incident_id"],
-                json.dumps(incident["metric"]),
-                incident["severity"],
-                incident.get("root_cause"),
-                incident.get("recommended_action"),
-                incident.get("action_taken"),
-                incident["status"],
-                incident.get("slack_message_ts"),
-                int(incident["human_approved"]) if incident.get("human_approved") is not None else None,
-                incident["created_at"],
-                incident["updated_at"],
-                incident.get("confidence_score"),
-                incident.get("critique"),
-            ))
+            """,
+                (
+                    incident["incident_id"],
+                    json.dumps(incident["metric"]),
+                    incident["severity"],
+                    incident.get("root_cause"),
+                    incident.get("recommended_action"),
+                    incident.get("action_taken"),
+                    incident["status"],
+                    incident.get("slack_message_ts"),
+                    (
+                        int(incident["human_approved"])
+                        if incident.get("human_approved") is not None
+                        else None
+                    ),
+                    incident["created_at"],
+                    incident["updated_at"],
+                    incident.get("confidence_score"),
+                    incident.get("critique"),
+                ),
+            )
             conn.commit()
 
     def get(self, incident_id: str) -> Optional[IncidentState]:
@@ -93,7 +102,9 @@ class IncidentStore:
             ).fetchall()
         return [self._row_to_state(r) for r in rows]
 
-    def get_similar_resolved(self, source: str, name: str, limit: int = 3) -> List[IncidentState]:
+    def get_similar_resolved(
+        self, source: str, name: str, limit: int = 3
+    ) -> List[IncidentState]:
         """
         Retrieves past resolved incidents ranked using a custom NLP TF Cosine Similarity search
         to ensure semantic match over raw text.
@@ -106,13 +117,25 @@ class IncidentStore:
             if not text:
                 return []
             words = re.findall(r"\b[a-zA-Z]{3,}\b", text.lower())
-            stop_words = {"the", "and", "for", "with", "this", "that", "from", "was", "were"}
+            stop_words = {
+                "the",
+                "and",
+                "for",
+                "with",
+                "this",
+                "that",
+                "from",
+                "was",
+                "were",
+            }
             return [w for w in words if w not in stop_words]
 
         # Fetch all resolved incidents to perform search locally
         with self._connect() as conn:
-            rows = conn.execute("SELECT * FROM incidents WHERE status='resolved'").fetchall()
-        
+            rows = conn.execute(
+                "SELECT * FROM incidents WHERE status='resolved'"
+            ).fetchall()
+
         all_incidents = [self._row_to_state(r) for r in rows]
         if not all_incidents:
             return []
@@ -124,7 +147,7 @@ class IncidentStore:
             return []
 
         c_query = Counter(query_tokens)
-        sum_q = sum(val ** 2 for val in c_query.values())
+        sum_q = sum(val**2 for val in c_query.values())
         if sum_q == 0:
             return []
 
@@ -139,12 +162,12 @@ class IncidentStore:
             c_doc = Counter(doc_tokens)
             intersection = set(c_query.keys()) & set(c_doc.keys())
             numerator = sum(c_query[x] * c_doc[x] for x in intersection)
-            sum_d = sum(val ** 2 for val in c_doc.values())
-            
+            sum_d = sum(val**2 for val in c_doc.values())
+
             denominator = math.sqrt(sum_q) * math.sqrt(sum_d)
             similarity = numerator / denominator if denominator else 0.0
 
-            if similarity > 0.05: # threshold
+            if similarity > 0.05:  # threshold
                 scored_incidents.append((similarity, inc))
 
         # Rank by score descending, then return the top resolved
@@ -176,7 +199,11 @@ class IncidentStore:
             action_taken=row["action_taken"],
             status=row["status"],
             slack_message_ts=row["slack_message_ts"],
-            human_approved=bool(row["human_approved"]) if row["human_approved"] is not None else None,
+            human_approved=(
+                bool(row["human_approved"])
+                if row["human_approved"] is not None
+                else None
+            ),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             confidence_score=confidence,
