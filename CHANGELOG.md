@@ -7,6 +7,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Pluggable multi-provider LLM layer** (`llm/`): choose Anthropic Claude
+  (default), OpenAI (and any OpenAI-compatible endpoint — Azure, Groq,
+  OpenRouter, Ollama, vLLM — via `OPENAI_BASE_URL`), or Google Gemini with a
+  single `LLM_PROVIDER` env var. Agent nodes now call a provider-agnostic
+  `complete()` interface; optional SDKs are imported lazily.
+- `config.active_model` and provider-aware `config.validate()`.
 - Opt-in autonomous remediation (`AUTO_REMEDIATE`) that lets the agent execute
   fixes for non-critical, high-confidence incidents in simulation mode.
 - `AUTO_APPROVE_MIN_CONFIDENCE` config to gate autonomous action on the

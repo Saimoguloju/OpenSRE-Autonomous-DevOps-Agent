@@ -12,7 +12,7 @@
 [![Claude AI](https://img.shields.io/badge/Claude-Anthropic-D97706?style=flat&logo=anthropic&logoColor=white)](https://anthropic.com)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat&logo=docker&logoColor=white)](https://hub.docker.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e?style=flat)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-49%20passing-22c55e?style=flat&logo=pytest&logoColor=white)](tests/)
+[![Tests](https://img.shields.io/badge/tests-63%20passing-22c55e?style=flat&logo=pytest&logoColor=white)](tests/)
 [![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?style=flat&logo=githubactions&logoColor=white)](.github/workflows/ci.yml)
 [![Simulation Mode](https://img.shields.io/badge/Simulation%20Mode-enabled-8b5cf6?style=flat)](#simulation-mode)
 
@@ -77,7 +77,8 @@ Infrastructure                    OpenSRE Agent                     Your Team
 
 | Feature | Description |
 |---|---|
-| 🤖 **AI Root Cause Analysis** | Claude AI analyzes each incident and writes a structured root cause + recommended remediation |
+| 🤖 **AI Root Cause Analysis** | The configured LLM analyzes each incident and writes a structured root cause + recommended remediation |
+| 🔌 **Pluggable LLM Providers** | Swap between **Anthropic Claude**, **OpenAI** (and any OpenAI-compatible endpoint — Azure, Groq, OpenRouter, **Ollama**), and **Google Gemini** with a single `LLM_PROVIDER` env var — no code changes |
 | 🧠 **Local Database RAG** | SQLite-based historical incident search feeds context of past resolutions to Claude for remediation consistency |
 | 🔁 **LangGraph State Machine** | Stateful `DETECT → ANALYZE → DECIDE → ACT` pipeline — no spaghetti if/else |
 | 🕵️‍♂️ **Agentic Self-Critique** | Separate LangGraph node audits proposed remediation safety/correctness and forces human approval if confidence is low (< 80) |
@@ -103,10 +104,16 @@ opensre/
 │
 ├── agent/                      # LangGraph state machine
 │   ├── state.py                # IncidentState & Metric TypedDicts
-│   ├── graph.py                # Node wiring: DETECT→ANALYZE→DECIDE→ACT
+│   ├── graph.py                # Node wiring: ANALYZE→CRITIQUE→DECIDE→ACT + resume
 │   ├── guardrails.py           # Safety checks and command validation
 │   ├── metrics.py              # Prometheus metrics declarations
-│   └── nodes.py                # Claude AI analysis, decision, execution logic
+│   └── nodes.py                # AI analysis, self-critique, decision, execution
+│
+├── llm/                        # Pluggable LLM provider layer
+│   ├── base.py                 # LLMProvider interface (complete())
+│   ├── anthropic_provider.py   # Claude (default)
+│   ├── openai_provider.py      # OpenAI + OpenAI-compatible (Azure/Groq/Ollama…)
+│   └── google_provider.py      # Google Gemini
 │
 ├── monitors/                   # Infrastructure polling
 │   ├── base.py                 # BaseMonitor ABC + severity() formula
@@ -320,8 +327,14 @@ All configuration is done via environment variables. Set them in your `.env` fil
 
 | Variable | Default | Required | Description |
 |---|---|---|---|
-| `ANTHROPIC_API_KEY` | — | **Yes** | Your Claude API key from [console.anthropic.com](https://console.anthropic.com) |
+| `LLM_PROVIDER` | `anthropic` | No | Which LLM backend to use: `anthropic`, `openai`, or `google` |
+| `ANTHROPIC_API_KEY` | — | Yes¹ | Claude API key from [console.anthropic.com](https://console.anthropic.com) (required when `LLM_PROVIDER=anthropic`) |
 | `OPENSRE_MODEL` | `claude-sonnet-4-6` | No | Claude model to use for analysis |
+| `OPENAI_API_KEY` | — | Yes¹ | OpenAI key (required when `LLM_PROVIDER=openai`) |
+| `OPENAI_MODEL` | `gpt-4o-mini` | No | OpenAI model to use |
+| `OPENAI_BASE_URL` | — | No | OpenAI-compatible endpoint (Azure / Groq / OpenRouter / Ollama, e.g. `http://localhost:11434/v1`) |
+| `GOOGLE_API_KEY` | — | Yes¹ | Google AI key (or `GEMINI_API_KEY`; required when `LLM_PROVIDER=google`) |
+| `GEMINI_MODEL` | `gemini-2.0-flash` | No | Gemini model to use |
 | `SIMULATION_MODE` | `true` | No | `true` = no real cloud credentials needed |
 | `AUTO_REMEDIATE` | `false` | No | `true` lets the agent auto-execute fixes for non-critical, high-confidence incidents (simulation mode only). Default keeps human-in-the-loop for everything. |
 | `AUTO_APPROVE_MIN_CONFIDENCE` | `80` | No | Minimum self-critique confidence (0–100) required for autonomous action |
@@ -344,6 +357,50 @@ All configuration is done via environment variables. Set them in your `.env` fil
 | `AWS_REGION` | `us-east-1` | No | AWS region for CloudWatch / EC2 |
 | `AWS_ACCESS_KEY_ID` | — | No | AWS access key (real mode only) |
 | `AWS_SECRET_ACCESS_KEY` | — | No | AWS secret key (real mode only) |
+
+¹ Exactly one LLM API key is required — whichever matches your `LLM_PROVIDER`.
+
+---
+
+## 🔌 LLM Providers
+
+OpenSRE is **provider-agnostic**. All AI work (root cause analysis, self-critique,
+post-mortems) goes through a single `complete()` interface in the [`llm/`](llm/)
+package, so switching vendors is a config change — never a code change.
+
+| Provider | `LLM_PROVIDER` | Install | Key |
+|---|---|---|---|
+| **Anthropic Claude** *(default)* | `anthropic` | `pip install anthropic` (already in `requirements.txt`) | `ANTHROPIC_API_KEY` |
+| **OpenAI** | `openai` | `pip install openai` | `OPENAI_API_KEY` |
+| **OpenAI-compatible** (Azure, Groq, OpenRouter, **Ollama**, vLLM) | `openai` | `pip install openai` | `OPENAI_API_KEY` + `OPENAI_BASE_URL` |
+| **Google Gemini** | `google` | `pip install google-genai` | `GOOGLE_API_KEY` |
+
+**Examples:**
+
+```env
+# Claude (default)
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+
+# OpenAI
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o-mini
+
+# Local Ollama (free, offline) — OpenAI-compatible
+LLM_PROVIDER=openai
+OPENAI_API_KEY=ollama          # any non-empty value
+OPENAI_BASE_URL=http://localhost:11434/v1
+OPENAI_MODEL=llama3.1
+
+# Google Gemini
+LLM_PROVIDER=google
+GOOGLE_API_KEY=...
+GEMINI_MODEL=gemini-2.0-flash
+```
+
+> **Add your own provider** in three steps: subclass `LLMProvider` in `llm/`, implement
+> `complete(system, user, max_tokens)`, and register it in `llm/__init__.py`.
 
 ---
 
@@ -459,11 +516,11 @@ self.pagerduty = PagerDutyNotifier()
 
 ## 🧪 Testing
 
-OpenSRE ships with a comprehensive offline test suite — **49 tests** covering safety
+OpenSRE ships with a comprehensive offline test suite — **63 tests** covering safety
 guardrails, the SQLite store, the local RAG ranking, the decision/critique logic, an
-end-to-end LangGraph run (with a mocked Claude client), the monitors, config
-validation, and the notification builders. Everything runs in **simulation mode with a
-mock API key** — no real credentials or network calls.
+end-to-end LangGraph run (with a mocked LLM provider), the pluggable provider layer,
+the monitors, config validation, and the notification builders. Everything runs in
+**simulation mode with a mock API key** — no real credentials or network calls.
 
 ```bash
 pip install -r requirements-dev.txt
@@ -502,7 +559,7 @@ Contributions are welcome and appreciated! This is an open learning project — 
 |---|---|
 | **Python 3.12** + **asyncio** | Core runtime and async I/O |
 | **LangGraph** | Stateful multi-node agent pipeline |
-| **Anthropic Claude** | Root cause analysis and remediation recommendations |
+| **Anthropic Claude / OpenAI / Google Gemini** | Pluggable LLM backends for root cause analysis and remediation recommendations |
 | **Slack Bolt** | Interactive Slack bot with button callbacks |
 | **python-telegram-bot** | Telegram Bot API client |
 | **Twilio** | WhatsApp message delivery |

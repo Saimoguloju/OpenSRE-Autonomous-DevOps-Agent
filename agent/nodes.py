@@ -1,21 +1,21 @@
 import logging
 from datetime import datetime, UTC
 
-import anthropic
-
 from agent.state import IncidentState
 from config import config
+from llm import get_provider
 
 logger = logging.getLogger(__name__)
 
-_client: anthropic.Anthropic | None = None
+
+def _complete(system: str, user: str, max_tokens: int = 1024) -> str:
+    """Send a prompt to the active LLM provider and return its text response."""
+    return get_provider().complete(system=system, user=user, max_tokens=max_tokens)
 
 
-def _get_client() -> anthropic.Anthropic:
-    global _client
-    if _client is None:
-        _client = anthropic.Anthropic(api_key=config.anthropic_api_key)
-    return _client
+def _is_mock() -> bool:
+    """True when the active provider is configured with the mock_key sentinel."""
+    return get_provider().is_mock
 
 
 def analyze_root_cause(state: IncidentState) -> IncidentState:
@@ -65,19 +65,12 @@ Severity: {state['severity']}{past_context}
 Analyze this incident and provide your root cause assessment and recommended action. If past similar incidents are listed, use them as guidance to maintain remediation consistency."""
 
     try:
-        client = _get_client()
         from agent.metrics import CLAUDE_LATENCY
 
         with CLAUDE_LATENCY.time():
-            response = client.messages.create(
-                model=config.model,
-                max_tokens=512,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_message}],
-            )
-        analysis = response.content[0].text
+            analysis = _complete(system_prompt, user_message, max_tokens=512)
 
-        # Robust regex-based parsing to handle bold tags and spacing variations from Claude
+        # Robust regex-based parsing to handle bold tags and spacing variations from the model
         import re
 
         rc_match = re.search(r"ROOT\s*CAUSE:\s*(.*)", analysis, re.IGNORECASE)
@@ -99,8 +92,8 @@ Analyze this incident and provide your root cause assessment and recommended act
             recommended_action or "Manual investigation required."
         )
     except Exception as e:
-        logger.error("Claude analysis failed: %s", e)
-        state["root_cause"] = "Analysis unavailable — Claude API error."
+        logger.error("Root cause analysis failed: %s", e)
+        state["root_cause"] = "Analysis unavailable — LLM provider error."
         state["recommended_action"] = "Manual investigation required."
 
     state["status"] = "awaiting_approval"
@@ -249,18 +242,11 @@ Resolved At: {state['updated_at']}
 
     post_mortem_content = ""
     try:
-        # Try Claude first
-        client = _get_client()
-        response = client.messages.create(
-            model=config.model,
-            max_tokens=1024,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_message}],
-        )
-        post_mortem_content = response.content[0].text
+        # Try the LLM provider first
+        post_mortem_content = _complete(system_prompt, user_message, max_tokens=1024)
     except Exception as e:
         logger.warning(
-            "Could not generate SRE post-mortem using Claude: %s. Falling back to template.",
+            "Could not generate SRE post-mortem via the LLM provider: %s. Falling back to template.",
             e,
         )
 
@@ -308,7 +294,6 @@ def critique_remediation(state: IncidentState) -> IncidentState:
     Self-reflection node: audits Claude's recommended action using a separate auditor prompt.
     Scores confidence and writes critique notes.
     """
-    import os
     import re
 
     recommended_action = state.get("recommended_action", "")
@@ -322,11 +307,8 @@ def critique_remediation(state: IncidentState) -> IncidentState:
         state["updated_at"] = datetime.now(UTC).isoformat()
         return state
 
-    # Mock evaluation for simulation / unit tests
-    if (
-        config.anthropic_api_key == "mock_key"
-        or os.environ.get("ANTHROPIC_API_KEY") == "mock_key"
-    ):
+    # Mock evaluation for simulation / unit tests (any provider with a mock key)
+    if _is_mock():
         from agent.guardrails import RemediationGuardrail
 
         is_safe, reason = RemediationGuardrail.validate_command(recommended_action)
@@ -362,14 +344,7 @@ Proposed Root Cause: {root_cause}
 Proposed Command/Remediation: {recommended_action}"""
 
     try:
-        client = _get_client()
-        response = client.messages.create(
-            model=config.model,
-            max_tokens=256,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_message}],
-        )
-        audit_output = response.content[0].text
+        audit_output = _complete(system_prompt, user_message, max_tokens=256)
 
         score_match = re.search(
             r"CONFIDENCE\s*SCORE:\s*(\d+)", audit_output, re.IGNORECASE
@@ -395,7 +370,7 @@ Proposed Command/Remediation: {recommended_action}"""
     except Exception as e:
         logger.error("Self-critique auditing failed: %s", e)
         state["confidence_score"] = 50
-        state["critique"] = "Auditing failed — Claude API error."
+        state["critique"] = "Auditing failed — LLM provider error."
         state["status"] = "awaiting_approval"
 
     state["updated_at"] = datetime.now(UTC).isoformat()

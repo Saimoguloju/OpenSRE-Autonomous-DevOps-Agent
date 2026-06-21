@@ -4,12 +4,40 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Config:
-    # ── LLM ────────────────────────────────────────────────────────────────
+    # ── LLM provider selection ───────────────────────────────────────────────
+    # Which backend powers root-cause analysis, self-critique, and post-mortems.
+    # One of: "anthropic" (default), "openai" (or OpenAI-compatible), "google".
+    llm_provider: str = field(
+        default_factory=lambda: os.getenv("LLM_PROVIDER", "anthropic")
+    )
+
+    # ── Anthropic (default provider) ─────────────────────────────────────────
     anthropic_api_key: str = field(
         default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", "")
     )
+    # OPENSRE_MODEL is kept for backward compatibility; it is the Anthropic model.
     model: str = field(
         default_factory=lambda: os.getenv("OPENSRE_MODEL", "claude-sonnet-4-6")
+    )
+
+    # ── OpenAI / OpenAI-compatible (optional) ────────────────────────────────
+    # base_url lets you target Azure OpenAI, Groq, Together, OpenRouter, or a
+    # local Ollama / vLLM server that speaks the OpenAI Chat Completions API.
+    openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
+    openai_model: str = field(
+        default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    )
+    openai_base_url: str = field(
+        default_factory=lambda: os.getenv("OPENAI_BASE_URL", "")
+    )
+
+    # ── Google Gemini (optional) ─────────────────────────────────────────────
+    google_api_key: str = field(
+        default_factory=lambda: os.getenv("GOOGLE_API_KEY")
+        or os.getenv("GEMINI_API_KEY", "")
+    )
+    google_model: str = field(
+        default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
     )
 
     # ── Slack (optional) ────────────────────────────────────────────────────
@@ -111,8 +139,32 @@ class Config:
     )
 
     def validate(self):
-        if not self.anthropic_api_key:
-            raise ValueError("ANTHROPIC_API_KEY is required. Set it in your .env file.")
+        # Require the API key for whichever LLM provider is selected.
+        provider = (self.llm_provider or "anthropic").strip().lower()
+        if provider in ("anthropic", "claude"):
+            if not self.anthropic_api_key:
+                raise ValueError(
+                    "ANTHROPIC_API_KEY is required for LLM_PROVIDER=anthropic. "
+                    "Set it in your .env file."
+                )
+        elif provider in ("openai", "openai-compatible", "azure", "groq", "ollama"):
+            if not self.openai_api_key:
+                raise ValueError(
+                    "OPENAI_API_KEY is required for LLM_PROVIDER=openai. "
+                    "Set it in your .env file (use any non-empty value for local "
+                    "OpenAI-compatible servers that don't check keys)."
+                )
+        elif provider in ("google", "gemini"):
+            if not self.google_api_key:
+                raise ValueError(
+                    "GOOGLE_API_KEY (or GEMINI_API_KEY) is required for "
+                    "LLM_PROVIDER=google. Set it in your .env file."
+                )
+        else:
+            raise ValueError(
+                f"Unknown LLM_PROVIDER '{self.llm_provider}'. "
+                "Valid options: anthropic, openai, google."
+            )
 
         # Warn if no notification channel is configured
         has_slack = bool(self.slack_bot_token)
@@ -133,6 +185,16 @@ class Config:
                 "DATABASE_URL is required when SIMULATION_MODE=false and real DB tools are used. "
                 "Example: postgresql://user:password@localhost:5432/mydb"
             )
+
+    @property
+    def active_model(self) -> str:
+        """The model id of the currently selected LLM provider (for logging)."""
+        provider = (self.llm_provider or "anthropic").strip().lower()
+        if provider in ("openai", "openai-compatible", "azure", "groq", "ollama"):
+            return self.openai_model
+        if provider in ("google", "gemini"):
+            return self.google_model
+        return self.model
 
     @property
     def whatsapp_recipients(self) -> list[str]:

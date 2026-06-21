@@ -17,33 +17,16 @@ _ANALYSIS = (
 )
 
 
-class _FakeBlock:
-    def __init__(self, text):
-        self.text = text
-
-
-class _FakeResponse:
-    def __init__(self, text):
-        self.content = [_FakeBlock(text)]
-
-
-class _FakeMessages:
-    def __init__(self, text):
-        self._text = text
-
-    def create(self, **kwargs):
-        return _FakeResponse(self._text)
-
-
-class _FakeClient:
-    def __init__(self, text):
-        self.messages = _FakeMessages(text)
-
-
 @pytest.fixture
 def fake_claude(monkeypatch, tmp_path):
-    """Mock the Claude client and isolate post-mortem output to a temp dir."""
-    monkeypatch.setattr(nodes, "_get_client", lambda: _FakeClient(_ANALYSIS))
+    """Mock the LLM provider call and isolate post-mortem output to a temp dir.
+
+    Patching the provider-agnostic ``_complete`` seam means this test is
+    independent of which LLM provider is configured.
+    """
+    monkeypatch.setattr(
+        nodes, "_complete", lambda system, user, max_tokens=1024: _ANALYSIS
+    )
     monkeypatch.chdir(tmp_path)  # post_mortems/ is written relative to cwd
     return tmp_path
 

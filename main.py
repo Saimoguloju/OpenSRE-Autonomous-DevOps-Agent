@@ -142,7 +142,9 @@ async def monitor_loop(
         "OpenSRE monitor loop started. Poll interval: %ds", config.poll_interval_seconds
     )
     logger.info("Simulation mode: %s", config.simulation_mode)
-    logger.info("Model: %s", config.model)
+    logger.info(
+        "LLM provider: %s (model: %s)", config.llm_provider, config.active_model
+    )
     logger.info("Alert cooldown: %ds per fingerprint", config.alert_cooldown_seconds)
 
     while True:

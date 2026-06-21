@@ -27,6 +27,39 @@ def test_validate_requires_db_url_when_not_simulating(monkeypatch):
         Config().validate()
 
 
+def test_validate_openai_provider_requires_openai_key(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+        Config().validate()
+
+
+def test_validate_openai_provider_passes_with_key(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+    monkeypatch.setenv("SIMULATION_MODE", "true")
+    Config().validate()
+
+
+def test_validate_google_provider_requires_key(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "google")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="GOOGLE_API_KEY"):
+        Config().validate()
+
+
+def test_validate_unknown_provider_raises(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "bogus")
+    with pytest.raises(ValueError, match="Unknown LLM_PROVIDER"):
+        Config().validate()
+
+
+def test_llm_provider_defaults_to_anthropic(monkeypatch):
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    assert Config().llm_provider == "anthropic"
+
+
 def test_whatsapp_recipients_parsing(monkeypatch):
     monkeypatch.setenv("WHATSAPP_ALERT_NUMBERS", "whatsapp:+1111, whatsapp:+2222 , ")
     cfg = Config()
